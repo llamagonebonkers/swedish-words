@@ -1,0 +1,19 @@
+{
+  "name": "Swedish Words",
+  "short_name": "Swedish Words",
+  "description": "Learn Swedish words and phrases with English and Thai explanations.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fafafa",
+  "theme_color": "#2563eb",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#fafafa" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>Swedish Words</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Sticky Top Header -->
+    <header class="header">
+      <div class="header-top">
+        <div class="search-wrap">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input
+            type="search"
+            id="searchInput"
+            class="search-input"
+            placeholder="Search (SV / EN / TH)..."
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+            aria-label="Search"
+          />
+          <button type="button" id="clearSearchBtn" class="clear-btn hidden" aria-label="Clear search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <button type="button" id="addBtn" class="add-btn" aria-label="Add new">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Segmented Tab Control -->
+      <nav class="tabs" role="tablist" aria-label="Category">
+        <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="word">
+          Words <span class="tab-count" id="wordCount">0</span>
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="phrase">
+          Phrases <span class="tab-count" id="phraseCount">0</span>
+        </button>
+      </nav>
+    </header>
+
+    <!-- Main Scrollable List -->
+    <main class="main" id="listContainer">
+      <div id="entriesList" class="entries-list"></div>
+      <div id="emptyState" class="empty-state hidden">
+        <p class="empty-title" id="emptyTitle">No words yet</p>
+        <p class="empty-sub" id="emptySub">Tap + to add your first word.</p>
+      </div>
+    </main>
+
+    <!-- Alphabet Scrubber (A–Ö) -->
+    <aside class="scrubber" id="scrubber" aria-label="Quick navigation A to Ö"></aside>
+
+    <!-- Floating Letter Popup -->
+    <div class="letter-popup hidden" id="letterPopup" aria-hidden="true">A</div>
+
+    <!-- Detail Bottom Sheet (Click word for explanation) -->
+    <div class="backdrop hidden" id="detailBackdrop">
+      <div class="sheet" id="detailSheet" role="dialog" aria-modal="true" aria-labelledby="detailTerm">
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <span class="sheet-badge" id="detailBadge">Word</span>
+          <div class="sheet-actions">
+            <button type="button" class="icon-btn" id="editEntryBtn" aria-label="Edit">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+            </button>
+            <button type="button" class="icon-btn danger" id="deleteEntryBtn" aria-label="Delete">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <h2 class="detail-term" id="detailTerm"></h2>
+        <div class="detail-translations">
+          <div class="translation-block hidden" id="detailEnWrap">
+            <span class="translation-lang">English</span>
+            <p class="translation-text" id="detailEn"></p>
+          </div>
+          <div class="translation-block hidden" id="detailThWrap">
+            <span class="translation-lang">Thai · ภาษาไทย</span>
+            <p class="translation-text thai" id="detailTh"></p>
+          </div>
+        </div>
+        <div class="detail-example hidden" id="detailExampleWrap">
+          <span class="detail-example-label">Example</span>
+          <p class="detail-example-text" id="detailExample"></p>
+        </div>
+        <button type="button" class="btn-secondary full-width" id="closeDetailBtn">Close</button>
+      </div>
+    </div>
+
+    <!-- Add / Edit Bottom Sheet -->
+    <div class="backdrop hidden" id="formBackdrop">
+      <div class="sheet" id="formSheet" role="dialog" aria-modal="true" aria-labelledby="formTitle">
+        <div class="sheet-handle"></div>
+        <h2 class="form-title" id="formTitle">Add word</h2>
+        <form id="entryForm" novalidate>
+          <div class="form-type-switch" id="formTypeSwitch">
+            <button type="button" class="type-pill active" data-type="word">Word</button>
+            <button type="button" class="type-pill" data-type="phrase">Phrase</button>
+          </div>
+
+          <label class="field">
+            <span class="field-label" id="termLabel">Swedish word</span>
+            <div class="term-row">
+              <input type="text" id="termInput" class="input" placeholder="e.g. lagom" required autocomplete="off" />
+              <button type="button" id="suggestBtn" class="suggest-btn" title="Fetch English and Thai translation suggestions">
+                Suggest
+              </button>
+            </div>
+            <span class="translate-status hidden" id="translateStatus"></span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">English</span>
+            <input type="text" id="enInput" class="input" placeholder="e.g. just right / not too much" autocomplete="off" />
+          </label>
+
+          <label class="field">
+            <span class="field-label">Thai (ภาษาไทย)</span>
+            <input type="text" id="thInput" class="input" placeholder="e.g. พอดี" autocomplete="off" />
+          </label>
+
+          <label class="field">
+            <span class="field-label">Example (optional)</span>
+            <input type="text" id="exampleInput" class="input" placeholder="e.g. Kaffet är lagom varmt." autocomplete="off" />
+          </label>
+
+          <p class="form-error hidden" id="formError">Enter a Swedish word and at least one translation (English or Thai).</p>
+
+          <div class="form-buttons">
+            <button type="button" class="btn-secondary" id="cancelFormBtn">Cancel</button>
+            <button type="submit" class="btn-primary" id="saveFormBtn">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
