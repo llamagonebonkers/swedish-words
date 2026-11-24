@@ -509,6 +509,68 @@ body {
   font-style: italic;
 }
 
+.detail-grammar {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+
+.grammar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.grammar-header .detail-example-label {
+  margin-bottom: 0;
+}
+
+.grammar-pos {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.grammar-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.grammar-forms {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.grammar-form-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 7px 10px;
+}
+
+.grammar-form-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.grammar-form-value {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+
 /* Form */
 .form-title {
   margin: 0 0 14px;
@@ -615,6 +677,51 @@ body {
 
 .translate-status.error {
   color: var(--danger);
+}
+
+.suggest-btn.secondary {
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 13px;
+  padding: 0 11px;
+}
+
+.en-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.en-chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.en-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.chip-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 4px;
+  font-weight: 400;
+}
+
+.en-chip.active .chip-hint {
+  color: var(--accent);
+  opacity: 0.85;
 }
 
 .textarea {

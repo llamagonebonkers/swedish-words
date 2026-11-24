@@ -109,6 +109,14 @@
           <span class="detail-example-label">Example</span>
           <p class="detail-example-text" id="detailExample"></p>
         </div>
+        <div class="detail-grammar hidden" id="detailGrammarWrap">
+          <div class="grammar-header">
+            <span class="detail-example-label">Grammar &amp; forms</span>
+            <span class="grammar-pos hidden" id="detailPos"></span>
+          </div>
+          <p class="grammar-status hidden" id="detailGrammarStatus">Loading...</p>
+          <div class="grammar-forms" id="detailForms"></div>
+        </div>
         <button type="button" class="btn-secondary full-width" id="closeDetailBtn">Close</button>
       </div>
     </div>
@@ -133,6 +141,7 @@
               </button>
             </div>
             <span class="translate-status hidden" id="translateStatus"></span>
+            <div class="en-suggestions hidden" id="enSuggestions" role="group" aria-label="English suggestions"></div>
           </label>
 
           <label class="field">
@@ -142,7 +151,13 @@
 
           <label class="field">
             <span class="field-label">Thai (ภาษาไทย)</span>
-            <input type="text" id="thInput" class="input" placeholder="e.g. พอดี" autocomplete="off" />
+            <div class="term-row">
+              <input type="text" id="thInput" class="input" placeholder="e.g. พอดี" autocomplete="off" />
+              <button type="button" id="retranslateThBtn" class="suggest-btn secondary" title="Translate Thai from the English text">
+                From EN
+              </button>
+            </div>
+            <div class="en-suggestions hidden" id="thSuggestions" role="group" aria-label="Thai suggestions"></div>
           </label>
 
           <label class="field">

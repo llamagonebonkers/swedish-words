@@ -81,6 +81,10 @@
   const detailTh = document.getElementById('detailTh');
   const detailExampleWrap = document.getElementById('detailExampleWrap');
   const detailExample = document.getElementById('detailExample');
+  const detailGrammarWrap = document.getElementById('detailGrammarWrap');
+  const detailPos = document.getElementById('detailPos');
+  const detailGrammarStatus = document.getElementById('detailGrammarStatus');
+  const detailForms = document.getElementById('detailForms');
   const editEntryBtn = document.getElementById('editEntryBtn');
   const deleteEntryBtn = document.getElementById('deleteEntryBtn');
   const closeDetailBtn = document.getElementById('closeDetailBtn');
@@ -97,6 +101,9 @@
   const exampleInput = document.getElementById('exampleInput');
   const suggestBtn = document.getElementById('suggestBtn');
   const translateStatus = document.getElementById('translateStatus');
+  const enSuggestions = document.getElementById('enSuggestions');
+  const thSuggestions = document.getElementById('thSuggestions');
+  const retranslateThBtn = document.getElementById('retranslateThBtn');
   const formError = document.getElementById('formError');
   const cancelFormBtn = document.getElementById('cancelFormBtn');
 
@@ -454,6 +461,178 @@
     }
 
     detailBackdrop.classList.remove('hidden');
+    loadAndRenderGrammar(item);
+  }
+
+  const GRAMMAR_LABELS_EN = {
+    infinitiv: 'Infinitive',
+    presens: 'Present',
+    preteritum: 'Past',
+    supinum: 'Supine',
+    imperativ: 'Imperative',
+    nominativ: 'Base',
+    genitiv: 'Possessive',
+    singular: 'Singular',
+    plural: 'Plural',
+    obestämd: 'Indefinite',
+    bestämd: 'Definite',
+    'obestämd singular': 'Indef. singular',
+    'bestämd singular': 'Def. singular',
+    'obestämd plural': 'Indef. plural',
+    'bestämd plural': 'Def. plural',
+    obestämdsingular: 'Indef. singular',
+    bestämdsingular: 'Def. singular',
+    obestämdplural: 'Indef. plural',
+    bestämdplural: 'Def. plural',
+    neutrum: 'Neuter (ett)',
+    utrum: 'Common (en)',
+    alla: 'All (plural/def.)',
+    positiv: 'Positive',
+    komparativ: 'Comparative',
+    superlativ: 'Superlative'
+  };
+
+  function toEnglishGrammarLabel(label) {
+    const key = (label || '').trim().toLowerCase();
+    return GRAMMAR_LABELS_EN[key] || label;
+  }
+
+  function renderGrammarData(grammar) {
+    detailGrammarStatus.classList.add('hidden');
+    detailForms.innerHTML = '';
+
+    if (!grammar || (!grammar.pos && (!grammar.forms || grammar.forms.length === 0))) {
+      detailGrammarWrap.classList.add('hidden');
+      return;
+    }
+
+    if (grammar.pos) {
+      detailPos.textContent = grammar.pos;
+      detailPos.classList.remove('hidden');
+    } else {
+      detailPos.classList.add('hidden');
+    }
+
+    if (Array.isArray(grammar.forms)) {
+      for (const f of grammar.forms) {
+        const card = document.createElement('div');
+        card.className = 'grammar-form-item';
+
+        const lbl = document.createElement('span');
+        lbl.className = 'grammar-form-label';
+        lbl.textContent = toEnglishGrammarLabel(f.label);
+
+        const val = document.createElement('span');
+        val.className = 'grammar-form-value';
+        val.textContent = f.value;
+
+        card.appendChild(lbl);
+        card.appendChild(val);
+        detailForms.appendChild(card);
+      }
+    }
+
+    detailGrammarWrap.classList.remove('hidden');
+  }
+
+  async function fetchWiktionaryGrammar(word) {
+    const cleanWord = word.trim().toLocaleLowerCase('sv-SE');
+    let pos = '';
+    let forms = [];
+
+    const [enRes, svRes] = await Promise.allSettled([
+      fetch(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(cleanWord)}`).then((r) =>
+        r.ok ? r.json() : null
+      ),
+      fetch(
+        `https://sv.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(cleanWord)}&prop=text&format=json&origin=*`
+      ).then((r) => (r.ok ? r.json() : null))
+    ]);
+
+    if (enRes.status === 'fulfilled' && Array.isArray(enRes.value?.sv) && enRes.value.sv.length > 0) {
+      pos = enRes.value.sv[0].partOfSpeech || '';
+    }
+
+    if (svRes.status === 'fulfilled' && svRes.value?.parse?.text?.['*']) {
+      const doc = new DOMParser().parseFromString(svRes.value.parse.text['*'], 'text/html');
+      const tables = Array.from(doc.querySelectorAll('table.grammar'));
+      const posLower = pos.toLowerCase();
+      let table = tables[0] || null;
+      if (tables.length > 1 && posLower) {
+        const matchKey =
+          posLower === 'verb' ? 'verb' : posLower === 'noun' ? 'subst' : posLower === 'adjective' ? 'adj' : '';
+        if (matchKey) {
+          table = tables.find((t) => (t.className || '').includes(matchKey)) || tables[0];
+        }
+      }
+      if (table) {
+        if (!pos) {
+          const cls = table.className || '';
+          if (cls.includes('verb')) pos = 'Verb';
+          else if (cls.includes('subst')) pos = 'Noun';
+          else if (cls.includes('adj')) pos = 'Adjective';
+          else if (cls.includes('adv')) pos = 'Adverb';
+        }
+
+        const rows = table.querySelectorAll('tr');
+        for (const row of rows) {
+          const ths = row.querySelectorAll('th');
+          const tds = row.querySelectorAll('td');
+          if (ths.length === 0 || tds.length === 0) continue;
+
+          ths[0].querySelectorAll('br').forEach((br) => br.replaceWith(' '));
+          const label = ths[0].textContent.replace(/\s+/g, ' ').trim();
+          const value = tds[0].textContent.replace(/\s+/g, ' ').trim();
+
+          if (!label || !value || value === '–' || value === '-') continue;
+          if (/^böjningar av/i.test(label) || /^particip$/i.test(label)) continue;
+
+          forms.push({ label, value });
+          if (forms.length >= 6) break;
+        }
+      }
+    }
+
+    if (!pos && forms.length === 0) return null;
+    return { pos, forms };
+  }
+
+  async function loadAndRenderGrammar(item) {
+    if (item.type !== 'word' || item.term.trim().includes(' ')) {
+      detailGrammarWrap.classList.add('hidden');
+      return;
+    }
+
+    if (item.grammar) {
+      renderGrammarData(item.grammar);
+      return;
+    }
+
+    if (!navigator.onLine) {
+      detailGrammarWrap.classList.add('hidden');
+      return;
+    }
+
+    detailPos.classList.add('hidden');
+    detailForms.innerHTML = '';
+    detailGrammarStatus.textContent = 'Loading grammar...';
+    detailGrammarStatus.classList.remove('hidden');
+    detailGrammarWrap.classList.remove('hidden');
+
+    try {
+      const grammar = await fetchWiktionaryGrammar(item.term);
+      if (grammar) {
+        item.grammar = grammar;
+        saveEntries();
+      }
+      if (selectedEntryId === item.id) {
+        renderGrammarData(grammar);
+      }
+    } catch (_) {
+      if (selectedEntryId === item.id) {
+        detailGrammarWrap.classList.add('hidden');
+      }
+    }
   }
 
   function closeDetail() {
@@ -504,8 +683,13 @@
     formError.classList.add('hidden');
     translateStatus.classList.add('hidden');
     translateStatus.classList.remove('error');
+    enSuggestions.innerHTML = '';
+    enSuggestions.classList.add('hidden');
+    thSuggestions.innerHTML = '';
+    thSuggestions.classList.add('hidden');
     suggestBtn.disabled = false;
     suggestBtn.textContent = 'Suggest';
+    retranslateThBtn.disabled = false;
     if (existingItem) {
       editingEntryId = existingItem.id;
       formTitle.textContent = existingItem.type === 'phrase' ? 'Edit phrase' : 'Edit word';
@@ -551,11 +735,19 @@
     }
 
     if (editingEntryId) {
-      entries = entries.map((item) =>
-        item.id === editingEntryId
-          ? { ...item, type: formType, term, en, th, example }
-          : item
-      );
+      entries = entries.map((item) => {
+        if (item.id !== editingEntryId) return item;
+        const termChanged = item.term.trim().toLowerCase() !== term.toLowerCase();
+        return {
+          ...item,
+          type: formType,
+          term,
+          en,
+          th,
+          example,
+          grammar: termChanged ? undefined : item.grammar
+        };
+      });
     } else {
       const id = 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       entries.push({ id, type: formType, term, en, th, example });
@@ -583,17 +775,186 @@
     }
   });
 
-  async function fetchTranslation(text, targetLang) {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=sv|${targetLang}`;
+  async function fetchGoogleDict(text, fromLang, toLang) {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${fromLang}&tl=${toLang}&dt=t&dt=bd&q=${encodeURIComponent(text)}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    const translated = data?.responseData?.translatedText;
-    if (!translated || translated.toUpperCase().includes('MYMEMORY WARNING')) {
+
+    const primary = Array.isArray(data?.[0])
+      ? data[0].map((seg) => seg?.[0] || '').join('').trim()
+      : '';
+
+    const dictEntries = [];
+    if (Array.isArray(data?.[1])) {
+      for (const posBlock of data[1]) {
+        const pos = posBlock?.[0] || '';
+        const detailed = posBlock?.[2];
+        if (Array.isArray(detailed)) {
+          for (const entry of detailed) {
+            const word = (entry?.[0] || '').trim();
+            const back = Array.isArray(entry?.[1]) ? entry[1].slice(0, 2).join(', ') : '';
+            if (word) dictEntries.push({ text: word, pos, back });
+          }
+        } else if (Array.isArray(posBlock?.[1])) {
+          for (const word of posBlock[1]) {
+            if (word) dictEntries.push({ text: String(word).trim(), pos, back: '' });
+          }
+        }
+      }
+    }
+
+    return { primary, dictEntries };
+  }
+
+  async function fetchMyMemoryFallback(text, fromLang, toLang) {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${fromLang}|${toLang}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const primary = (data?.responseData?.translatedText || '').trim();
+    if (!primary || primary.toUpperCase().includes('MYMEMORY WARNING')) {
       throw new Error('No translation');
     }
-    return translated.trim();
+    return { primary, dictEntries: [] };
   }
+
+  async function translateWithDict(text, fromLang, toLang) {
+    try {
+      return await fetchGoogleDict(text, fromLang, toLang);
+    } catch (_) {
+      return await fetchMyMemoryFallback(text, fromLang, toLang);
+    }
+  }
+
+  function buildCandidateList(result, sourceText, maxItems = 5) {
+    const seen = new Set();
+    const list = [];
+
+    const add = (text, hint = '') => {
+      if (!text) return;
+      const cleaned = text.trim();
+      if (!cleaned) return;
+      const key = cleaned.toLowerCase();
+      if (key === sourceText.trim().toLowerCase() || seen.has(key)) return;
+      seen.add(key);
+      list.push({ text: cleaned, hint });
+    };
+
+    add(result.primary);
+    for (const item of result.dictEntries) {
+      const hint = item.back || item.pos || '';
+      add(item.text, hint);
+      if (list.length >= maxItems) break;
+    }
+
+    if (list.length === 0 && result.primary) {
+      list.push({ text: result.primary, hint: '' });
+    }
+    return list.slice(0, maxItems);
+  }
+
+  function renderThaiChips(candidates) {
+    thSuggestions.innerHTML = '';
+    if (candidates.length <= 1) {
+      thSuggestions.classList.add('hidden');
+      return;
+    }
+    candidates.forEach((cand, idx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'en-chip' + (idx === 0 ? ' active' : '');
+      btn.textContent = cand.text;
+      if (cand.hint) {
+        const hintSpan = document.createElement('span');
+        hintSpan.className = 'chip-hint';
+        hintSpan.textContent = `(${cand.hint})`;
+        btn.appendChild(hintSpan);
+      }
+      btn.addEventListener('click', () => {
+        thSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
+        btn.classList.add('active');
+        thInput.value = cand.text;
+      });
+      thSuggestions.appendChild(btn);
+    });
+    thSuggestions.classList.remove('hidden');
+  }
+
+  async function translateThaiFromEnglish(enText) {
+    if (!enText) return;
+    retranslateThBtn.disabled = true;
+    thSuggestions.innerHTML = '';
+    thSuggestions.classList.add('hidden');
+    translateStatus.textContent = `Translating "${enText}" to Thai...`;
+    translateStatus.classList.remove('error', 'hidden');
+    try {
+      const result = await translateWithDict(enText, 'en', 'th');
+      const candidates = buildCandidateList(result, enText, 5);
+      if (candidates.length > 0) {
+        thInput.value = candidates[0].text;
+        renderThaiChips(candidates);
+        translateStatus.textContent = 'Pick the best match above or tap Save.';
+        translateStatus.classList.remove('error');
+      } else {
+        translateStatus.textContent = 'Could not translate to Thai right now.';
+        translateStatus.classList.add('error');
+      }
+    } catch (_) {
+      translateStatus.textContent = 'Could not translate to Thai right now.';
+      translateStatus.classList.add('error');
+    } finally {
+      retranslateThBtn.disabled = false;
+    }
+  }
+
+  function renderEnglishChips(candidates) {
+    enSuggestions.innerHTML = '';
+    if (candidates.length === 0) {
+      enSuggestions.classList.add('hidden');
+      return;
+    }
+    candidates.forEach((cand, idx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'en-chip' + (idx === 0 ? ' active' : '');
+      btn.textContent = cand.text;
+      btn.addEventListener('click', () => {
+        enSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
+        btn.classList.add('active');
+        enInput.value = cand.text;
+        translateThaiFromEnglish(cand.text);
+      });
+      enSuggestions.appendChild(btn);
+    });
+    enSuggestions.classList.remove('hidden');
+  }
+
+  enInput.addEventListener('input', () => {
+    enSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
+  });
+
+  thInput.addEventListener('input', () => {
+    thSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
+  });
+
+  retranslateThBtn.addEventListener('click', () => {
+    const enText = enInput.value.trim();
+    if (!enText) {
+      translateStatus.textContent = 'Enter English text first.';
+      translateStatus.classList.add('error');
+      translateStatus.classList.remove('hidden');
+      enInput.focus();
+      return;
+    }
+    if (!navigator.onLine) {
+      translateStatus.textContent = 'Offline – enter translation manually.';
+      translateStatus.classList.add('error');
+      translateStatus.classList.remove('hidden');
+      return;
+    }
+    translateThaiFromEnglish(enText);
+  });
 
   suggestBtn.addEventListener('click', async () => {
     const text = termInput.value.trim();
@@ -614,28 +975,20 @@
 
     suggestBtn.disabled = true;
     suggestBtn.textContent = 'Searching...';
-    translateStatus.textContent = 'Fetching English and Thai suggestions...';
+    enSuggestions.innerHTML = '';
+    enSuggestions.classList.add('hidden');
+    thSuggestions.innerHTML = '';
+    thSuggestions.classList.add('hidden');
+    translateStatus.textContent = 'Finding English options...';
     translateStatus.classList.remove('error', 'hidden');
 
     try {
-      const [enRes, thRes] = await Promise.allSettled([
-        fetchTranslation(text, 'en'),
-        fetchTranslation(text, 'th')
-      ]);
-
-      let filled = 0;
-      if (enRes.status === 'fulfilled' && enRes.value) {
-        enInput.value = enRes.value;
-        filled++;
-      }
-      if (thRes.status === 'fulfilled' && thRes.value) {
-        thInput.value = thRes.value;
-        filled++;
-      }
-
-      if (filled > 0) {
-        translateStatus.textContent = 'Suggestions filled – review and tap Save.';
-        translateStatus.classList.remove('error');
+      const enResult = await translateWithDict(text, 'sv', 'en');
+      const candidates = buildCandidateList(enResult, text, 5);
+      if (candidates.length > 0) {
+        renderEnglishChips(candidates);
+        enInput.value = candidates[0].text;
+        await translateThaiFromEnglish(candidates[0].text);
       } else {
         translateStatus.textContent = 'Could not fetch suggestions right now.';
         translateStatus.classList.add('error');
