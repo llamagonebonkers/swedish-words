@@ -26,10 +26,11 @@
             type="search"
             id="searchInput"
             class="search-input"
-            placeholder="Search (SV / EN / TH)..."
+            placeholder="Search SV, EN, TH..."
             autocomplete="off"
             autocorrect="off"
             spellcheck="false"
+            enterkeyhint="search"
             aria-label="Search"
           />
           <button type="button" id="clearSearchBtn" class="clear-btn hidden" aria-label="Clear search">
@@ -39,6 +40,24 @@
             </svg>
           </button>
         </div>
+        <button type="button" id="toggleHintsBtn" class="header-icon-btn" aria-label="Hide English translations in list" aria-pressed="false" title="Show/hide translations in list">
+          <svg id="eyeOpenIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+          <svg id="eyeClosedIcon" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+            <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+            <line x1="1" y1="1" x2="23" y2="23"></line>
+          </svg>
+        </button>
+        <button type="button" id="settingsBtn" class="header-icon-btn" aria-label="Backup and settings" title="Backup &amp; settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="1"></circle>
+            <circle cx="12" cy="5" r="1"></circle>
+            <circle cx="12" cy="19" r="1"></circle>
+          </svg>
+        </button>
         <button type="button" id="addBtn" class="add-btn" aria-label="Add new">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -55,6 +74,9 @@
         <button type="button" class="tab" role="tab" aria-selected="false" data-tab="phrase">
           Phrases <span class="tab-count" id="phraseCount">0</span>
         </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="practice">
+          Practice <span class="tab-count" id="practiceCount">0</span>
+        </button>
       </nav>
     </header>
 
@@ -64,7 +86,65 @@
       <div id="emptyState" class="empty-state hidden">
         <p class="empty-title" id="emptyTitle">No words yet</p>
         <p class="empty-sub" id="emptySub">Tap + to add your first word.</p>
+        <div class="empty-actions" id="emptyActions"></div>
       </div>
+
+      <!-- Practice View (Flashcards) -->
+      <section id="practiceView" class="practice-view hidden" aria-label="Flashcard practice">
+        <div class="practice-toolbar">
+          <div class="practice-filters" role="group" aria-label="Practice filter">
+            <button type="button" class="filter-pill active" data-filter="all">All</button>
+            <button type="button" class="filter-pill" data-filter="word">Words</button>
+            <button type="button" class="filter-pill" data-filter="phrase">Phrases</button>
+          </div>
+          <span class="practice-progress" id="practiceProgress"></span>
+        </div>
+
+        <div id="flashcardWrap" class="flashcard-wrap hidden">
+          <div class="flashcard" id="flashcard" role="button" tabindex="0" aria-label="Reveal translation">
+            <div class="flashcard-top">
+              <span class="sheet-badge" id="cardBadge">Word</span>
+              <button type="button" class="speak-btn small hidden" id="cardSpeakBtn" aria-label="Listen to Swedish pronunciation" title="Listen">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="flashcard-term" id="cardTerm"></div>
+            <p class="flashcard-tap-hint" id="cardTapHint">Tap card to reveal answer</p>
+
+            <div class="flashcard-answer hidden" id="cardAnswer">
+              <div class="flashcard-divider"></div>
+              <div class="translation-block hidden" id="cardEnWrap">
+                <span class="translation-lang">English</span>
+                <p class="translation-text" id="cardEn"></p>
+              </div>
+              <div class="translation-block hidden" id="cardThWrap">
+                <span class="translation-lang">Thai · ภาษาไทย</span>
+                <p class="translation-text thai" id="cardTh"></p>
+              </div>
+              <p class="flashcard-example hidden" id="cardExample"></p>
+            </div>
+          </div>
+
+          <div class="practice-actions" id="practiceRevealWrap">
+            <button type="button" class="btn-primary full-width" id="revealAnswerBtn">Show answer</button>
+          </div>
+          <div class="practice-actions two-col hidden" id="practiceRateWrap">
+            <button type="button" class="btn-again" id="rateAgainBtn">Again</button>
+            <button type="button" class="btn-knew" id="rateKnewBtn">Knew it</button>
+          </div>
+        </div>
+
+        <div id="practiceDone" class="empty-state hidden">
+          <p class="empty-title" id="practiceDoneTitle">All caught up!</p>
+          <p class="empty-sub" id="practiceDoneSub">You have reviewed all due cards.</p>
+          <div class="empty-actions">
+            <button type="button" class="btn-primary" id="practiceMoreBtn">Practice all anyway</button>
+          </div>
+        </div>
+      </section>
     </main>
 
     <!-- Alphabet Scrubber (A–Ö) -->
@@ -73,10 +153,10 @@
     <!-- Floating Letter Popup -->
     <div class="letter-popup hidden" id="letterPopup" aria-hidden="true">A</div>
 
-    <!-- Undo Toast -->
+    <!-- Undo / Info Toast -->
     <div class="toast hidden" id="undoToast" role="status" aria-live="polite">
       <span class="toast-text" id="undoToastText">Deleted</span>
-      <button type="button" class="toast-action" id="undoBtn">Undo</button>
+      <button type="button" class="toast-action hidden" id="undoBtn">Undo</button>
     </div>
 
     <!-- Detail Bottom Sheet (Click word for explanation) -->
@@ -112,6 +192,7 @@
           </button>
           <h2 class="detail-term" id="detailTerm"></h2>
         </div>
+        <p class="voice-tip hidden" id="detailVoiceTip" role="status" aria-live="polite"></p>
         <div class="detail-translations">
           <div class="translation-block hidden" id="detailEnWrap">
             <span class="translation-lang">English</span>
@@ -136,7 +217,7 @@
         </div>
         <div class="detail-grammar hidden" id="detailGrammarWrap">
           <div class="grammar-header">
-            <span class="detail-example-label">Grammar &amp; forms</span>
+            <span class="detail-example-label" id="detailGrammarTitle">Grammar &amp; forms</span>
             <span class="grammar-pos hidden" id="detailPos"></span>
           </div>
           <p class="grammar-status hidden" id="detailGrammarStatus" aria-live="polite">Loading...</p>
@@ -162,24 +243,42 @@
           <div class="field">
             <label class="field-label" id="termLabel" for="termInput">Swedish word</label>
             <div class="term-row">
-              <input type="text" id="termInput" class="input" placeholder="e.g. lagom" required autocomplete="off" />
-              <button type="button" id="suggestBtn" class="suggest-btn" title="Fetch English and Thai translation suggestions">
+              <input
+                type="text"
+                id="termInput"
+                class="input"
+                placeholder="e.g. lagom"
+                required
+                autocomplete="off"
+                autocapitalize="none"
+                enterkeyhint="search"
+              />
+              <button type="button" id="suggestBtn" class="suggest-btn" title="Fetch translation suggestions (SV ↔ EN / TH)">
                 Suggest
               </button>
             </div>
+            <div class="inline-notice hidden" id="duplicateNotice" role="status" aria-live="polite">
+              <span id="duplicateText">Already in your list.</span>
+              <button type="button" class="link-btn" id="editDuplicateBtn">Edit existing</button>
+            </div>
+            <div class="inline-notice info hidden" id="baseFormNotice" role="status" aria-live="polite">
+              <span id="baseFormText">Base form:</span>
+              <button type="button" class="link-btn" id="useBaseFormBtn"></button>
+            </div>
             <span class="translate-status hidden" id="translateStatus" role="status" aria-live="polite"></span>
+            <div class="en-suggestions hidden" id="svSuggestions" role="group" aria-label="Swedish suggestions"></div>
             <div class="en-suggestions hidden" id="enSuggestions" role="group" aria-label="English suggestions"></div>
           </div>
 
           <div class="field">
             <label class="field-label" for="enInput">English</label>
-            <input type="text" id="enInput" class="input" placeholder="e.g. just right / not too much" autocomplete="off" />
+            <input type="text" id="enInput" class="input" placeholder="e.g. just right / not too much" autocomplete="off" enterkeyhint="next" />
           </div>
 
           <div class="field">
             <label class="field-label" for="thInput">Thai (ภาษาไทย)</label>
             <div class="term-row">
-              <input type="text" id="thInput" class="input" placeholder="e.g. พอดี" autocomplete="off" />
+              <input type="text" id="thInput" class="input" placeholder="e.g. พอดี" autocomplete="off" enterkeyhint="next" />
               <button type="button" id="retranslateThBtn" class="suggest-btn secondary" title="Translate Thai from the English text">
                 From EN
               </button>
@@ -189,7 +288,8 @@
 
           <div class="field">
             <label class="field-label" for="exampleInput">Example (optional)</label>
-            <input type="text" id="exampleInput" class="input" placeholder="e.g. Kaffet är lagom varmt." autocomplete="off" />
+            <input type="text" id="exampleInput" class="input" placeholder="e.g. Kaffet är lagom varmt." autocomplete="off" enterkeyhint="done" />
+            <div class="en-suggestions hidden" id="exampleSuggestions" role="group" aria-label="Example sentence suggestions"></div>
           </div>
 
           <p class="form-error hidden" id="formError" role="alert" aria-live="polite">Enter a Swedish word and at least one translation (English or Thai).</p>
@@ -199,6 +299,48 @@
             <button type="submit" class="btn-primary" id="saveFormBtn">Save</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Settings & Backup Bottom Sheet -->
+    <div class="backdrop hidden" id="settingsBackdrop">
+      <div class="sheet" id="settingsSheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
+        <div class="sheet-handle-zone" aria-hidden="true">
+          <div class="sheet-handle"></div>
+        </div>
+        <h2 class="form-title" id="settingsTitle">Backup &amp; Settings</h2>
+
+        <div class="settings-group">
+          <button type="button" class="settings-row" id="exportBtn">
+            <span class="settings-row-main">
+              <span class="settings-row-title">Export backup (JSON)</span>
+              <span class="settings-row-sub">Save all your words and phrases to a file</span>
+            </span>
+          </button>
+          <button type="button" class="settings-row" id="importBtn">
+            <span class="settings-row-main">
+              <span class="settings-row-title">Import backup (JSON)</span>
+              <span class="settings-row-sub">Merge words from a previously saved file</span>
+            </span>
+          </button>
+          <input type="file" id="importFileInput" accept=".json,application/json" class="hidden" />
+        </div>
+
+        <div class="settings-group">
+          <button type="button" class="settings-row" id="sampleWordsBtn">
+            <span class="settings-row-main">
+              <span class="settings-row-title" id="sampleWordsTitle">Add sample words</span>
+              <span class="settings-row-sub" id="sampleWordsSub">Add starter Swedish words &amp; phrases</span>
+            </span>
+          </button>
+        </div>
+
+        <div class="settings-note hidden" id="settingsVoiceNote">
+          <strong>Swedish pronunciation tip:</strong> No Swedish voice was detected on this device. Install Swedish in your phone's Text-to-Speech settings for accurate audio.
+        </div>
+        <p class="settings-storage-note" id="storageNote">All words are saved locally on this device.</p>
+
+        <button type="button" class="btn-secondary full-width" id="closeSettingsBtn">Close</button>
       </div>
     </div>
   </div>

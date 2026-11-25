@@ -1,4 +1,4 @@
-const CACHE_NAME = 'svenska-ord-v16';
+const CACHE_NAME = 'svenska-ord-v17';
 const ASSETS = [
   './',
   './index.html',
