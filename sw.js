@@ -1,9 +1,9 @@
-const CACHE_NAME = 'svenska-ord-v17';
+const CACHE_NAME = 'svenska-ord-v18';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css',
-  './app.js',
+  './styles.css?v=18',
+  './app.js?v=18',
   './manifest.webmanifest',
   './icon.svg',
   './icon-192.png',

@@ -148,7 +148,7 @@ body.sheet-open {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
-  color: var(--text-muted);
+  color: var(--text);
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -190,11 +190,12 @@ body.sheet-open {
   height: 22px;
 }
 
-/* Segmented Tabs (3 columns) */
+/* Segmented Tabs (3 columns, never wraps) */
 .tabs {
   margin-top: 10px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
   gap: 3px;
   padding: 3px;
   background: var(--surface-muted);
@@ -202,18 +203,20 @@ body.sheet-open {
 }
 
 .tab {
+  flex: 1 1 0;
+  min-width: 0;
   border: none;
   background: transparent;
   color: var(--text-muted);
   font-size: 13px;
   font-weight: 600;
-  padding: 7px 6px;
+  padding: 7px 4px;
   border-radius: 9px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   white-space: nowrap;
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -229,8 +232,9 @@ body.sheet-open {
   font-weight: 600;
   color: var(--text-muted);
   background: var(--surface-muted);
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 999px;
+  flex-shrink: 0;
 }
 
 .tab.active .tab-count {
