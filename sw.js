@@ -1,11 +1,13 @@
-const CACHE_NAME = 'svenska-ord-v7';
+const CACHE_NAME = 'svenska-ord-v9';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './manifest.webmanifest',
-  './icon.svg'
+  './icon.svg',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -33,16 +35,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Network-first when online so updates apply immediately, with cache fallback offline
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
+    fetch(request)
+      .then((response) => {
         if (response && response.status === 200) {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }
         return response;
-      });
-    })
+      })
+      .catch(() => caches.match(request))
   );
 });

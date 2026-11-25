@@ -535,6 +535,176 @@
     detailGrammarWrap.classList.remove('hidden');
   }
 
+  function isSwedishGrammarTable(table) {
+    if (table.dataset.lang) return table.dataset.lang === 'sv';
+    const cls = table.className || '';
+    if (cls.includes('template-sv-')) return true;
+    if (/template-(no|da|is|nn|fi|de|en|fr|es)-/.test(cls)) return false;
+    const html = table.innerHTML || '';
+    if (/#(Bokmål|Danska|Isländska|Nynorska|Norska)/i.test(html)) return false;
+    return true;
+  }
+
+  function detectTablePos(table) {
+    const h3 = (table.dataset.h3 || '').toLowerCase();
+    const cls = (table.className || '').toLowerCase();
+    if (h3 === 'verb' || cls.includes('verb')) return 'Verb';
+    if (h3 === 'subst' || cls.includes('subst')) return 'Noun';
+    if (h3 === 'adj' || cls.includes('adj')) return 'Adjective';
+    if (h3 === 'adv' || cls.includes('adv')) return 'Adverb';
+
+    const txt = (table.textContent || '').toLowerCase();
+    if (txt.includes('infinitiv') && txt.includes('presens')) return 'Verb';
+    if (txt.includes('komparativ') && txt.includes('superlativ')) return 'Adjective';
+    if (txt.includes('singular') && txt.includes('plural') && txt.includes('obestämd')) return 'Noun';
+    return '';
+  }
+
+  function cleanCellText(el) {
+    if (!el) return '';
+    return el.textContent.replace(/\s+/g, ' ').trim();
+  }
+
+  function validForm(val) {
+    return Boolean(val && val !== '–' && val !== '-' && val !== '—');
+  }
+
+  function parseNounTable(table) {
+    const forms = [];
+    let gender = '';
+    const mainThs = table.querySelectorAll('th.main');
+    for (const th of mainThs) {
+      const t = cleanCellText(th).toLowerCase();
+      if (t === 'utrum') gender = 'en';
+      else if (t === 'neutrum') gender = 'ett';
+    }
+
+    const rows = table.querySelectorAll('tr');
+    for (const row of rows) {
+      const th = row.querySelector('th');
+      if (!th) continue;
+      const label = cleanCellText(th).toLowerCase();
+      if (label === 'nominativ') {
+        const tds = row.querySelectorAll('td');
+        const sgIndef = cleanCellText(tds[0]);
+        const sgDef = cleanCellText(tds[1]);
+        const plIndef = cleanCellText(tds[2]);
+        const plDef = cleanCellText(tds[3]);
+        if (validForm(sgIndef)) forms.push({ label: 'Singular indef.', value: sgIndef });
+        if (validForm(sgDef)) forms.push({ label: 'Singular def.', value: sgDef });
+        if (validForm(plIndef)) forms.push({ label: 'Plural indef.', value: plIndef });
+        if (validForm(plDef)) forms.push({ label: 'Plural def.', value: plDef });
+        break;
+      }
+    }
+    return { pos: gender ? `Noun (${gender})` : 'Noun', forms };
+  }
+
+  function parseVerbTable(table) {
+    const forms = [];
+    let inParticip = false;
+    let passiveForm = '';
+    const rows = table.querySelectorAll('tr');
+
+    for (const row of rows) {
+      const ths = row.querySelectorAll('th');
+      const tds = row.querySelectorAll('td');
+      if (ths.length === 1 && tds.length === 0) {
+        const headerText = cleanCellText(ths[0]).toLowerCase();
+        if (headerText.includes('particip')) inParticip = true;
+        continue;
+      }
+      if (ths.length === 0 || tds.length === 0) continue;
+
+      const rawLabel = cleanCellText(ths[0]).toLowerCase();
+      const val = cleanCellText(tds[0]);
+      if (!validForm(val)) continue;
+
+      if (rawLabel === 'infinitiv') {
+        forms.push({ label: 'Infinitive', value: val });
+        const pass = cleanCellText(tds[1]);
+        if (validForm(pass)) passiveForm = pass;
+      } else if (rawLabel === 'presens' && !inParticip) {
+        forms.push({ label: 'Present', value: val });
+      } else if (rawLabel === 'preteritum') {
+        forms.push({ label: 'Past', value: val });
+      } else if (rawLabel === 'supinum') {
+        forms.push({ label: 'Supine', value: val });
+      } else if (rawLabel === 'imperativ') {
+        forms.push({ label: 'Imperative', value: val });
+      } else if (rawLabel === 'presens' && inParticip) {
+        forms.push({ label: 'Pres. participle', value: val });
+      } else if (rawLabel === 'perfekt' && inParticip) {
+        forms.push({ label: 'Past participle', value: val });
+      }
+    }
+
+    if (passiveForm && forms.length < 6) {
+      forms.push({ label: 'Passive', value: passiveForm });
+    }
+    return { pos: 'Verb', forms: forms.slice(0, 6) };
+  }
+
+  function parseAdjectiveTable(table) {
+    const forms = [];
+    let common = '';
+    let neuter = '';
+    let pluralDef = '';
+    let comparative = '';
+    let superlative = '';
+    let adverb = '';
+
+    const rows = table.querySelectorAll('tr');
+    for (const row of rows) {
+      const ths = Array.from(row.querySelectorAll('th')).map((th) => {
+        th.querySelectorAll('br').forEach((br) => br.replaceWith(' '));
+        return cleanCellText(th).toLowerCase();
+      });
+      const tds = row.querySelectorAll('td');
+      if (tds.length === 0) continue;
+
+      const rowHeader = ths.join(' ');
+      if (rowHeader.includes('adverbavledning')) {
+        const v = cleanCellText(tds[0]);
+        if (validForm(v)) adverb = v;
+        continue;
+      }
+
+      if (!common && rowHeader.includes('utrum')) {
+        const v0 = cleanCellText(tds[0]);
+        if (validForm(v0)) common = v0;
+        const v1 = cleanCellText(tds[1]);
+        if (validForm(v1)) comparative = v1;
+      } else if (!neuter && rowHeader.includes('neutrum')) {
+        const v0 = cleanCellText(tds[0]);
+        if (validForm(v0)) neuter = v0;
+      } else if (!pluralDef && (rowHeader.includes('alla') || rowHeader.includes('plural'))) {
+        const v0 = cleanCellText(tds[0]);
+        if (validForm(v0)) pluralDef = v0;
+        if (!superlative && tds[1]) {
+          const v1 = cleanCellText(tds[1]);
+          if (validForm(v1)) superlative = v1;
+        }
+      }
+
+      if (rowHeader.includes('singular') && rowHeader.includes('utrum') && tds.length >= 3) {
+        const comp = cleanCellText(tds[1]);
+        const sup = cleanCellText(tds[2]);
+        if (!comparative && validForm(comp)) comparative = comp;
+        if (validForm(sup)) superlative = sup;
+      }
+    }
+
+    if (common) forms.push({ label: 'Common (en)', value: common });
+    if (neuter) forms.push({ label: 'Neuter (ett)', value: neuter });
+    if (pluralDef) forms.push({ label: 'Plural / def.', value: pluralDef });
+    if (comparative) forms.push({ label: 'Comparative', value: comparative });
+    if (superlative) forms.push({ label: 'Superlative', value: superlative });
+    if (adverb && forms.length < 6) forms.push({ label: 'Adverb', value: adverb });
+
+    return { pos: 'Adjective', forms };
+  }
+
   async function fetchWiktionaryGrammar(word) {
     const cleanWord = word.trim().toLocaleLowerCase('sv-SE');
     let pos = '';
@@ -555,46 +725,56 @@
 
     if (svRes.status === 'fulfilled' && svRes.value?.parse?.text?.['*']) {
       const doc = new DOMParser().parseFromString(svRes.value.parse.text['*'], 'text/html');
-      const tables = Array.from(doc.querySelectorAll('table.grammar'));
+      const tables = Array.from(doc.querySelectorAll('table.grammar')).filter(isSwedishGrammarTable);
       const posLower = pos.toLowerCase();
       let table = tables[0] || null;
+
       if (tables.length > 1 && posLower) {
-        const matchKey =
-          posLower === 'verb' ? 'verb' : posLower === 'noun' ? 'subst' : posLower === 'adjective' ? 'adj' : '';
-        if (matchKey) {
-          table = tables.find((t) => (t.className || '').includes(matchKey)) || tables[0];
+        const target =
+          posLower === 'verb' ? 'Verb' : posLower === 'noun' ? 'Noun' : posLower === 'adjective' ? 'Adjective' : '';
+        if (target) {
+          table = tables.find((t) => detectTablePos(t) === target) || tables[0];
         }
       }
+
       if (table) {
-        if (!pos) {
-          const cls = table.className || '';
-          if (cls.includes('verb')) pos = 'Verb';
-          else if (cls.includes('subst')) pos = 'Noun';
-          else if (cls.includes('adj')) pos = 'Adjective';
-          else if (cls.includes('adv')) pos = 'Adverb';
-        }
+        const tablePos = detectTablePos(table);
+        if (tablePos === 'Noun') {
+          const parsed = parseNounTable(table);
+          pos = parsed.pos;
+          forms = parsed.forms;
+        } else if (tablePos === 'Verb') {
+          const parsed = parseVerbTable(table);
+          pos = parsed.pos;
+          forms = parsed.forms;
+        } else if (tablePos === 'Adjective') {
+          const parsed = parseAdjectiveTable(table);
+          pos = parsed.pos;
+          forms = parsed.forms;
+        } else {
+          if (!pos && tablePos) pos = tablePos;
+          const rows = table.querySelectorAll('tr');
+          for (const row of rows) {
+            const ths = row.querySelectorAll('th');
+            const tds = row.querySelectorAll('td');
+            if (ths.length === 0 || tds.length === 0) continue;
 
-        const rows = table.querySelectorAll('tr');
-        for (const row of rows) {
-          const ths = row.querySelectorAll('th');
-          const tds = row.querySelectorAll('td');
-          if (ths.length === 0 || tds.length === 0) continue;
+            ths[0].querySelectorAll('br').forEach((br) => br.replaceWith(' '));
+            const label = cleanCellText(ths[0]);
+            const value = cleanCellText(tds[0]);
 
-          ths[0].querySelectorAll('br').forEach((br) => br.replaceWith(' '));
-          const label = ths[0].textContent.replace(/\s+/g, ' ').trim();
-          const value = tds[0].textContent.replace(/\s+/g, ' ').trim();
+            if (!label || !validForm(value)) continue;
+            if (/^böjningar av/i.test(label) || /^particip$/i.test(label)) continue;
 
-          if (!label || !value || value === '–' || value === '-') continue;
-          if (/^böjningar av/i.test(label) || /^particip$/i.test(label)) continue;
-
-          forms.push({ label, value });
-          if (forms.length >= 6) break;
+            forms.push({ label, value });
+            if (forms.length >= 6) break;
+          }
         }
       }
     }
 
     if (!pos && forms.length === 0) return null;
-    return { pos, forms };
+    return { v: 3, pos, forms };
   }
 
   async function loadAndRenderGrammar(item) {
@@ -603,7 +783,7 @@
       return;
     }
 
-    if (item.grammar) {
+    if (item.grammar && item.grammar.v === 3) {
       renderGrammarData(item.grammar);
       return;
     }
