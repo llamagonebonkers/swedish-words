@@ -1,4 +1,4 @@
-const CACHE_NAME = 'svenska-ord-v12';
+const CACHE_NAME = 'svenska-ord-v16';
 const ASSETS = [
   './',
   './index.html',
@@ -35,16 +35,32 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-first when online so updates apply immediately, with cache fallback offline
+  // Stale-While-Revalidate: instant startup from cache, silent background refresh
   event.respondWith(
-    fetch(request)
-      .then((response) => {
-        if (response && response.status === 200) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+    caches.open(CACHE_NAME).then((cache) =>
+      cache.match(request).then((cached) => {
+        const networkPromise = fetch(request)
+          .then((response) => {
+            if (response && response.status === 200) {
+              cache.put(request, response.clone());
+            }
+            return response;
+          })
+          .catch(() => null);
+
+        if (cached) {
+          event.waitUntil(networkPromise);
+          return cached;
         }
-        return response;
+
+        return networkPromise.then((networkResponse) => {
+          if (networkResponse) return networkResponse;
+          if (request.mode === 'navigate') {
+            return cache.match('./index.html');
+          }
+          return new Response('', { status: 503, statusText: 'Offline' });
+        });
       })
-      .catch(() => caches.match(request))
+    )
   );
 });

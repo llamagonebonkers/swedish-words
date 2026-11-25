@@ -57,6 +57,14 @@
   let popupTimer = null;
   let suppressScrollPopup = false;
   let lastScrolledLetter = null;
+  let scrollTicking = false;
+  let lastFocusedEl = null;
+  let pushedModalHistory = false;
+  let lastDeletedEntry = null;
+  let undoTimer = null;
+  let translateAbortController = null;
+  let translateReqId = 0;
+  let grammarAbortController = null;
 
   // Elements
   const searchInput = document.getElementById('searchInput');
@@ -71,18 +79,23 @@
   const emptySub = document.getElementById('emptySub');
   const scrubber = document.getElementById('scrubber');
   const letterPopup = document.getElementById('letterPopup');
+  const undoToast = document.getElementById('undoToast');
+  const undoToastText = document.getElementById('undoToastText');
+  const undoBtn = document.getElementById('undoBtn');
 
   // Detail sheet
   const detailBackdrop = document.getElementById('detailBackdrop');
   const detailSheet = document.getElementById('detailSheet');
   const detailBadge = document.getElementById('detailBadge');
   const detailTerm = document.getElementById('detailTerm');
+  const speakTermBtn = document.getElementById('speakTermBtn');
   const detailEnWrap = document.getElementById('detailEnWrap');
   const detailEn = document.getElementById('detailEn');
   const detailThWrap = document.getElementById('detailThWrap');
   const detailTh = document.getElementById('detailTh');
   const detailExampleWrap = document.getElementById('detailExampleWrap');
   const detailExample = document.getElementById('detailExample');
+  const speakExampleBtn = document.getElementById('speakExampleBtn');
   const detailGrammarWrap = document.getElementById('detailGrammarWrap');
   const detailPos = document.getElementById('detailPos');
   const detailGrammarStatus = document.getElementById('detailGrammarStatus');
@@ -370,40 +383,52 @@
 
   scrubber.addEventListener('pointerup', endScrub);
   scrubber.addEventListener('pointercancel', endScrub);
+  scrubber.addEventListener(
+    'touchmove',
+    (e) => {
+      if (e.cancelable) e.preventDefault();
+    },
+    { passive: false }
+  );
 
   window.addEventListener(
     'scroll',
     () => {
-      if (
-        isScrubbing ||
-        suppressScrollPopup ||
-        !detailBackdrop.classList.contains('hidden') ||
-        !formBackdrop.classList.contains('hidden')
-      ) {
-        return;
-      }
-      const groups = entriesList.querySelectorAll('.letter-group');
-      if (groups.length === 0) return;
-
-      const headerHeight = document.querySelector('.header').offsetHeight + 16;
-      let currentLetter = groups[0].dataset.letter;
-
-      for (const group of groups) {
-        const rect = group.getBoundingClientRect();
-        if (rect.top <= headerHeight) {
-          currentLetter = group.dataset.letter;
-        } else {
-          break;
+      if (scrollTicking) return;
+      scrollTicking = true;
+      requestAnimationFrame(() => {
+        scrollTicking = false;
+        if (
+          isScrubbing ||
+          suppressScrollPopup ||
+          !detailBackdrop.classList.contains('hidden') ||
+          !formBackdrop.classList.contains('hidden')
+        ) {
+          return;
         }
-      }
+        const groups = entriesList.querySelectorAll('.letter-group');
+        if (groups.length === 0) return;
 
-      highlightScrubberLetter(currentLetter);
-      if (window.scrollY > 20 && currentLetter !== lastScrolledLetter) {
-        lastScrolledLetter = currentLetter;
-        showLetterPopup(currentLetter);
-      } else if (window.scrollY <= 20) {
-        lastScrolledLetter = currentLetter;
-      }
+        const headerHeight = document.querySelector('.header').offsetHeight + 16;
+        let currentLetter = groups[0].dataset.letter;
+
+        for (const group of groups) {
+          const rect = group.getBoundingClientRect();
+          if (rect.top <= headerHeight) {
+            currentLetter = group.dataset.letter;
+          } else {
+            break;
+          }
+        }
+
+        highlightScrubberLetter(currentLetter);
+        if (window.scrollY > 20 && currentLetter !== lastScrolledLetter) {
+          lastScrolledLetter = currentLetter;
+          showLetterPopup(currentLetter);
+        } else if (window.scrollY <= 20) {
+          lastScrolledLetter = currentLetter;
+        }
+      });
     },
     { passive: true }
   );
@@ -444,10 +469,135 @@
     });
   });
 
+  function fetchWithTimeout(url, { signal, timeoutMs = 8000 } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const onParentAbort = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timer);
+        controller.abort();
+      } else {
+        signal.addEventListener('abort', onParentAbort, { once: true });
+      }
+    }
+    return fetch(url, { signal: controller.signal }).finally(() => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onParentAbort);
+    });
+  }
+
+  function pushModalHistory() {
+    if (!pushedModalHistory) {
+      try {
+        history.pushState({ swedishWordsModal: true }, '');
+        pushedModalHistory = true;
+      } catch (_) {}
+    }
+  }
+
+  function popModalHistoryIfNeeded() {
+    if (pushedModalHistory) {
+      pushedModalHistory = false;
+      try {
+        history.back();
+      } catch (_) {}
+    }
+  }
+
+  function restoreFocus() {
+    if (lastFocusedEl && typeof lastFocusedEl.focus === 'function' && document.contains(lastFocusedEl)) {
+      try {
+        lastFocusedEl.focus({ preventScroll: true });
+      } catch (_) {}
+    }
+    lastFocusedEl = null;
+  }
+
+  function hideUndoToast() {
+    clearTimeout(undoTimer);
+    undoToast.classList.add('hidden');
+    lastDeletedEntry = null;
+  }
+
+  function showUndoToast(deletedItem) {
+    clearTimeout(undoTimer);
+    lastDeletedEntry = deletedItem;
+    undoToastText.textContent = `Deleted "${deletedItem.term}"`;
+    undoToast.classList.remove('hidden');
+    undoTimer = setTimeout(() => {
+      undoToast.classList.add('hidden');
+      lastDeletedEntry = null;
+    }, 5000);
+  }
+
+  undoBtn.addEventListener('click', () => {
+    if (!lastDeletedEntry) return;
+    entries.push(lastDeletedEntry);
+    saveEntries();
+    hideUndoToast();
+    render();
+  });
+
+  const supportsSpeech = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+  let swedishVoice = null;
+
+  function loadSwedishVoice() {
+    if (!supportsSpeech) return;
+    const voices = window.speechSynthesis.getVoices() || [];
+    swedishVoice =
+      voices.find((v) => v.lang && v.lang.toLowerCase() === 'sv-se') ||
+      voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('sv')) ||
+      null;
+  }
+
+  if (supportsSpeech) {
+    loadSwedishVoice();
+    window.speechSynthesis.addEventListener?.('voiceschanged', loadSwedishVoice);
+    speakTermBtn.classList.remove('hidden');
+    speakExampleBtn.classList.remove('hidden');
+  }
+
+  function stopSpeaking() {
+    if (!supportsSpeech) return;
+    try {
+      window.speechSynthesis.cancel();
+    } catch (_) {}
+    speakTermBtn.classList.remove('speaking');
+    speakExampleBtn.classList.remove('speaking');
+  }
+
+  function speakSwedish(text, btn) {
+    if (!supportsSpeech || !text) return;
+    stopSpeaking();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'sv-SE';
+    utterance.rate = 0.92;
+    if (!swedishVoice) loadSwedishVoice();
+    if (swedishVoice) utterance.voice = swedishVoice;
+    utterance.onstart = () => btn.classList.add('speaking');
+    utterance.onend = () => btn.classList.remove('speaking');
+    utterance.onerror = () => btn.classList.remove('speaking');
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch (_) {
+      btn.classList.remove('speaking');
+    }
+  }
+
+  speakTermBtn.addEventListener('click', () => {
+    speakSwedish(detailTerm.textContent.trim(), speakTermBtn);
+  });
+
+  speakExampleBtn.addEventListener('click', () => {
+    speakSwedish(detailExample.textContent.trim(), speakExampleBtn);
+  });
+
   // Detail Sheet
   function openDetail(id) {
     const item = entries.find((e) => e.id === id);
     if (!item) return;
+    if (!lastFocusedEl) lastFocusedEl = document.activeElement;
     selectedEntryId = id;
     detailBadge.textContent = item.type === 'phrase' ? 'Phrase' : 'Word';
     detailTerm.textContent = item.term;
@@ -478,6 +628,8 @@
     detailBackdrop.style.background = '';
     detailBackdrop.classList.remove('hidden');
     updateBodyScrollLock();
+    pushModalHistory();
+    detailSheet.focus({ preventScroll: true });
     loadAndRenderGrammar(item);
   }
 
@@ -722,17 +874,19 @@
     return { pos: 'Adjective', forms };
   }
 
-  async function fetchWiktionaryGrammar(word) {
+  async function fetchWiktionaryGrammar(word, signal) {
     const cleanWord = word.trim().toLocaleLowerCase('sv-SE');
     let pos = '';
     let forms = [];
 
     const [enRes, svRes] = await Promise.allSettled([
-      fetch(`https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(cleanWord)}`).then((r) =>
-        r.ok ? r.json() : null
-      ),
-      fetch(
-        `https://sv.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(cleanWord)}&prop=text&format=json&origin=*`
+      fetchWithTimeout(
+        `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(cleanWord)}`,
+        { signal, timeoutMs: 8000 }
+      ).then((r) => (r.ok ? r.json() : null)),
+      fetchWithTimeout(
+        `https://sv.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(cleanWord)}&prop=text&format=json&origin=*`,
+        { signal, timeoutMs: 8000 }
       ).then((r) => (r.ok ? r.json() : null))
     ]);
 
@@ -795,6 +949,11 @@
   }
 
   async function loadAndRenderGrammar(item) {
+    if (grammarAbortController) {
+      grammarAbortController.abort();
+      grammarAbortController = null;
+    }
+
     if (item.type !== 'word' || item.term.trim().includes(' ')) {
       detailGrammarWrap.classList.add('hidden');
       return;
@@ -816,8 +975,12 @@
     detailGrammarStatus.classList.remove('hidden');
     detailGrammarWrap.classList.remove('hidden');
 
+    const controller = new AbortController();
+    grammarAbortController = controller;
+
     try {
-      const grammar = await fetchWiktionaryGrammar(item.term);
+      const grammar = await fetchWiktionaryGrammar(item.term, controller.signal);
+      if (controller.signal.aborted) return;
       if (grammar) {
         item.grammar = grammar;
         saveEntries();
@@ -826,9 +989,11 @@
         renderGrammarData(grammar);
       }
     } catch (_) {
-      if (selectedEntryId === item.id) {
+      if (!controller.signal.aborted && selectedEntryId === item.id) {
         detailGrammarWrap.classList.add('hidden');
       }
+    } finally {
+      if (grammarAbortController === controller) grammarAbortController = null;
     }
   }
 
@@ -840,16 +1005,25 @@
     document.body.classList.toggle('sheet-open', anyOpen);
   }
 
-  function closeDetail() {
+  function closeDetail({ keepHistory = false, fromPopstate = false } = {}) {
+    stopSpeaking();
+    if (grammarAbortController) {
+      grammarAbortController.abort();
+      grammarAbortController = null;
+    }
     detailBackdrop.classList.add('hidden');
     detailSheet.style.transform = '';
     detailSheet.style.transition = '';
     detailBackdrop.style.background = '';
     selectedEntryId = null;
     updateBodyScrollLock();
+    if (!keepHistory && !fromPopstate) {
+      popModalHistoryIfNeeded();
+      restoreFocus();
+    }
   }
 
-  closeDetailBtn.addEventListener('click', closeDetail);
+  closeDetailBtn.addEventListener('click', () => closeDetail());
   detailBackdrop.addEventListener('click', (e) => {
     if (e.target === detailBackdrop) closeDetail();
   });
@@ -857,16 +1031,19 @@
   editEntryBtn.addEventListener('click', () => {
     const item = entries.find((e) => e.id === selectedEntryId);
     if (!item) return;
-    closeDetail();
+    closeDetail({ keepHistory: true });
     openForm(item);
   });
 
   deleteEntryBtn.addEventListener('click', () => {
     if (!selectedEntryId) return;
+    const deletedItem = entries.find((e) => e.id === selectedEntryId);
+    if (!deletedItem) return;
     entries = entries.filter((e) => e.id !== selectedEntryId);
     saveEntries();
     closeDetail();
     render();
+    showUndoToast(deletedItem);
   });
 
   // Add / Edit Form Sheet
@@ -889,6 +1066,12 @@
   });
 
   function openForm(existingItem = null) {
+    if (!lastFocusedEl) lastFocusedEl = document.activeElement;
+    if (translateAbortController) {
+      translateAbortController.abort();
+      translateAbortController = null;
+    }
+    translateReqId++;
     formError.classList.add('hidden');
     translateStatus.classList.add('hidden');
     translateStatus.classList.remove('error');
@@ -921,20 +1104,30 @@
     formBackdrop.style.background = '';
     formBackdrop.classList.remove('hidden');
     updateBodyScrollLock();
+    pushModalHistory();
     setTimeout(() => termInput.focus(), 60);
   }
 
-  function closeForm() {
+  function closeForm({ fromPopstate = false } = {}) {
+    if (translateAbortController) {
+      translateAbortController.abort();
+      translateAbortController = null;
+    }
+    translateReqId++;
     formBackdrop.classList.add('hidden');
     formSheet.style.transform = '';
     formSheet.style.transition = '';
     formBackdrop.style.background = '';
     editingEntryId = null;
     updateBodyScrollLock();
+    if (!fromPopstate) {
+      popModalHistoryIfNeeded();
+    }
+    restoreFocus();
   }
 
   addBtn.addEventListener('click', () => openForm(null));
-  cancelFormBtn.addEventListener('click', closeForm);
+  cancelFormBtn.addEventListener('click', () => closeForm());
   formBackdrop.addEventListener('click', (e) => {
     if (e.target === formBackdrop) closeForm();
   });
@@ -985,6 +1178,16 @@
     render();
   });
 
+  window.addEventListener('popstate', () => {
+    if (!formBackdrop.classList.contains('hidden')) {
+      pushedModalHistory = false;
+      closeForm({ fromPopstate: true });
+    } else if (!detailBackdrop.classList.contains('hidden')) {
+      pushedModalHistory = false;
+      closeDetail({ fromPopstate: true });
+    }
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!formBackdrop.classList.contains('hidden')) closeForm();
@@ -998,8 +1201,42 @@
     let currentY = 0;
     let tracking = false;
     let dragging = false;
+    let activeMode = null; // 'touch' | 'pointer'
 
-    // Prevent touchmove on backdrop from scrolling background list
+    function canStart(target) {
+      const onHandle = Boolean(target.closest('.sheet-handle-zone, .sheet-handle'));
+      const onInteractive = Boolean(target.closest('input, textarea, button, select, a'));
+      if (onHandle) return { allowed: true, onHandle: true };
+      if (onInteractive || sheet.scrollTop > 0) return { allowed: false, onHandle: false };
+      return { allowed: true, onHandle: false };
+    }
+
+    function applyDrag(deltaY) {
+      currentY = Math.max(0, deltaY);
+      sheet.style.transform = `translateY(${currentY}px)`;
+      const fade = Math.max(0.08, 0.42 * (1 - currentY / 360));
+      backdrop.style.background = `rgba(17, 24, 39, ${fade.toFixed(3)})`;
+    }
+
+    function finishDrag() {
+      if (!dragging) return;
+      dragging = false;
+
+      const elapsed = Math.max(1, Date.now() - startTime);
+      const velocity = currentY / elapsed;
+      if (currentY > 90 || (velocity > 0.45 && currentY > 30)) {
+        sheet.style.transition = 'transform 0.16s ease-out';
+        sheet.style.transform = 'translateY(100%)';
+        backdrop.style.background = 'rgba(17, 24, 39, 0)';
+        setTimeout(() => onClose(), 150);
+      } else {
+        sheet.style.transition = 'transform 0.18s ease-out';
+        sheet.style.transform = 'translateY(0)';
+        backdrop.style.background = '';
+      }
+    }
+
+    // Prevent touchmove on backdrop from scrolling background list or triggering pull-to-refresh
     backdrop.addEventListener(
       'touchmove',
       (e) => {
@@ -1008,18 +1245,70 @@
       { passive: false }
     );
 
+    // Touch events (Android / Samsung Internet / iOS) — preventDefault stops pull-to-refresh!
+    sheet.addEventListener(
+      'touchstart',
+      (e) => {
+        if (e.touches.length !== 1) return;
+        const check = canStart(e.target);
+        if (!check.allowed) return;
+        tracking = true;
+        dragging = false;
+        activeMode = 'touch';
+        startY = e.touches[0].clientY;
+        startTime = Date.now();
+        currentY = 0;
+      },
+      { passive: true }
+    );
+
+    sheet.addEventListener(
+      'touchmove',
+      (e) => {
+        if (!tracking || activeMode !== 'touch' || e.touches.length !== 1) return;
+        const deltaY = e.touches[0].clientY - startY;
+        if (!dragging) {
+          if (deltaY <= 6) {
+            if (deltaY < -6) tracking = false;
+            return;
+          }
+          if (sheet.scrollTop > 0) {
+            tracking = false;
+            return;
+          }
+          dragging = true;
+          sheet.style.transition = 'none';
+        }
+        if (e.cancelable) e.preventDefault();
+        applyDrag(deltaY);
+      },
+      { passive: false }
+    );
+
+    function endTouch() {
+      if (!tracking || activeMode !== 'touch') return;
+      tracking = false;
+      activeMode = null;
+      finishDrag();
+    }
+
+    sheet.addEventListener('touchend', endTouch, { passive: true });
+    sheet.addEventListener('touchcancel', endTouch, { passive: true });
+
+    // Pointer events for mouse / stylus (touch handled above)
     sheet.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') return;
       if (e.button !== undefined && e.button !== 0) return;
-      const onHandle = Boolean(e.target.closest('.sheet-handle'));
-      const onInteractive = Boolean(e.target.closest('input, textarea, button, select, a'));
-      if (!onHandle && (onInteractive || sheet.scrollTop > 0)) return;
+      const check = canStart(e.target);
+      if (!check.allowed) return;
 
       tracking = true;
       dragging = false;
+      activeMode = 'pointer';
       startY = e.clientY;
       startTime = Date.now();
       currentY = 0;
-      if (onHandle) {
+      if (check.onHandle) {
         try {
           sheet.setPointerCapture(e.pointerId);
         } catch (_) {}
@@ -1027,7 +1316,7 @@
     });
 
     sheet.addEventListener('pointermove', (e) => {
-      if (!tracking) return;
+      if (!tracking || activeMode !== 'pointer') return;
       const deltaY = e.clientY - startY;
       if (!dragging) {
         if (deltaY <= 6) {
@@ -1041,48 +1330,31 @@
         dragging = true;
         sheet.style.transition = 'none';
       }
-      currentY = Math.max(0, deltaY);
-      sheet.style.transform = `translateY(${currentY}px)`;
-      const fade = Math.max(0.08, 0.42 * (1 - currentY / 360));
-      backdrop.style.background = `rgba(17, 24, 39, ${fade.toFixed(3)})`;
+      applyDrag(deltaY);
     });
 
-    function endDrag(e) {
-      if (!tracking) return;
+    function endPointer(e) {
+      if (!tracking || activeMode !== 'pointer') return;
       tracking = false;
+      activeMode = null;
       try {
         if (sheet.hasPointerCapture(e.pointerId)) {
           sheet.releasePointerCapture(e.pointerId);
         }
       } catch (_) {}
-
-      if (!dragging) return;
-      dragging = false;
-
-      const elapsed = Math.max(1, Date.now() - startTime);
-      const velocity = currentY / elapsed;
-      if (currentY > 90 || (velocity > 0.45 && currentY > 30)) {
-        sheet.style.transition = 'transform 0.16s ease-out';
-        sheet.style.transform = 'translateY(100%)';
-        backdrop.style.background = 'rgba(17, 24, 39, 0)';
-        setTimeout(onClose, 150);
-      } else {
-        sheet.style.transition = 'transform 0.18s ease-out';
-        sheet.style.transform = 'translateY(0)';
-        backdrop.style.background = '';
-      }
+      finishDrag();
     }
 
-    sheet.addEventListener('pointerup', endDrag);
-    sheet.addEventListener('pointercancel', endDrag);
+    sheet.addEventListener('pointerup', endPointer);
+    sheet.addEventListener('pointercancel', endPointer);
   }
 
   enableSheetSwipeDismiss(detailBackdrop, detailSheet, closeDetail);
   enableSheetSwipeDismiss(formBackdrop, formSheet, closeForm);
 
-  async function fetchGoogleDict(text, fromLang, toLang) {
+  async function fetchGoogleDict(text, fromLang, toLang, signal) {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${fromLang}&tl=${toLang}&dt=t&dt=bd&q=${encodeURIComponent(text)}`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, { signal, timeoutMs: 8000 });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
 
@@ -1112,9 +1384,9 @@
     return { primary, dictEntries };
   }
 
-  async function fetchMyMemoryFallback(text, fromLang, toLang) {
+  async function fetchMyMemoryFallback(text, fromLang, toLang, signal) {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${fromLang}|${toLang}`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, { signal, timeoutMs: 8000 });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const primary = (data?.responseData?.translatedText || '').trim();
@@ -1124,11 +1396,12 @@
     return { primary, dictEntries: [] };
   }
 
-  async function translateWithDict(text, fromLang, toLang) {
+  async function translateWithDict(text, fromLang, toLang, signal) {
     try {
-      return await fetchGoogleDict(text, fromLang, toLang);
-    } catch (_) {
-      return await fetchMyMemoryFallback(text, fromLang, toLang);
+      return await fetchGoogleDict(text, fromLang, toLang, signal);
+    } catch (err) {
+      if (signal && signal.aborted) throw err;
+      return await fetchMyMemoryFallback(text, fromLang, toLang, signal);
     }
   }
 
@@ -1186,15 +1459,27 @@
     thSuggestions.classList.remove('hidden');
   }
 
-  async function translateThaiFromEnglish(enText) {
+  function startTranslateRequest() {
+    if (translateAbortController) {
+      translateAbortController.abort();
+    }
+    translateAbortController = new AbortController();
+    translateReqId++;
+    return { reqId: translateReqId, signal: translateAbortController.signal };
+  }
+
+  async function translateThaiFromEnglish(enText, existingReq = null) {
     if (!enText) return;
+    const { reqId, signal } = existingReq || startTranslateRequest();
+
     retranslateThBtn.disabled = true;
     thSuggestions.innerHTML = '';
     thSuggestions.classList.add('hidden');
     translateStatus.textContent = `Translating "${enText}" to Thai...`;
     translateStatus.classList.remove('error', 'hidden');
     try {
-      const result = await translateWithDict(enText, 'en', 'th');
+      const result = await translateWithDict(enText, 'en', 'th', signal);
+      if (reqId !== translateReqId || signal.aborted) return;
       const candidates = buildCandidateList(result, enText, 5);
       if (candidates.length > 0) {
         thInput.value = candidates[0].text;
@@ -1206,10 +1491,13 @@
         translateStatus.classList.add('error');
       }
     } catch (_) {
+      if (reqId !== translateReqId || signal.aborted) return;
       translateStatus.textContent = 'Could not translate to Thai right now.';
       translateStatus.classList.add('error');
     } finally {
-      retranslateThBtn.disabled = false;
+      if (reqId === translateReqId) {
+        retranslateThBtn.disabled = false;
+      }
     }
   }
 
@@ -1278,6 +1566,7 @@
       return;
     }
 
+    const req = startTranslateRequest();
     suggestBtn.disabled = true;
     suggestBtn.textContent = 'Searching...';
     enSuggestions.innerHTML = '';
@@ -1288,17 +1577,21 @@
     translateStatus.classList.remove('error', 'hidden');
 
     try {
-      const enResult = await translateWithDict(text, 'sv', 'en');
+      const enResult = await translateWithDict(text, 'sv', 'en', req.signal);
+      if (req.reqId !== translateReqId || req.signal.aborted) return;
       const candidates = buildCandidateList(enResult, text, 5);
+      suggestBtn.disabled = false;
+      suggestBtn.textContent = 'Suggest';
       if (candidates.length > 0) {
         renderEnglishChips(candidates);
         enInput.value = candidates[0].text;
-        await translateThaiFromEnglish(candidates[0].text);
+        await translateThaiFromEnglish(candidates[0].text, req);
       } else {
         translateStatus.textContent = 'Could not fetch suggestions right now.';
         translateStatus.classList.add('error');
       }
     } catch (_) {
+      if (req.reqId !== translateReqId || req.signal.aborted) return;
       translateStatus.textContent = 'Could not fetch suggestions right now.';
       translateStatus.classList.add('error');
     } finally {
