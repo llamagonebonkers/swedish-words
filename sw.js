@@ -1,45 +1,52 @@
-const CACHE_NAME = 'svenska-ord-v22';
+const CACHE_NAME = 'svenska-ord-v23';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=22',
-  './app.js?v=22',
+  './styles.css?v=23',
+  './telemetry.js?v=23',
+  './app.js?v=23',
   './manifest.webmanifest',
   './icon.svg',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './icon-512-maskable.png',
+  './apple-touch-icon.png'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches
+      .open(CACHE_NAME)
+      .then((cache) =>
+        Promise.all(
+          ASSETS.map((asset) => {
+            // Bypass browser/GitHub Pages 10-min HTTP cache for unversioned shell files
+            const isVersioned = asset.includes('?v=');
+            const req = new Request(asset, { cache: isVersioned ? 'default' : 'reload' });
+            return fetch(req).then((res) => {
+              if (!res.ok) throw new Error(`Precache failed for ${asset}: ${res.status}`);
+              return cache.put(asset, res);
+            });
+          })
+        )
+      )
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 function fetchWithTimeout(request, ms) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), ms);
-    fetch(request).then(
-      (res) => {
-        clearTimeout(timer);
-        resolve(res);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(request, { signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
 self.addEventListener('fetch', (event) => {
@@ -51,33 +58,32 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // HTML navigations: Network-first with fast 1.5s timeout -> instant cache fallback
+  // HTML navigations: Network-first with 1.5s AbortController timeout -> canonical cached index.html
   if (request.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html')) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) =>
         fetchWithTimeout(request, 1500)
           .then((response) => {
-            if (response && response.status === 200) {
+            if (response && response.ok && response.type === 'basic') {
               cache.put('./index.html', response.clone());
+              cache.put('./', response.clone());
             }
             return response;
           })
-          .catch(() =>
-            cache.match(request).then((cached) => cached || cache.match('./index.html'))
-          )
+          .catch(() => cache.match('./index.html').then((cached) => cached || cache.match('./')))
       )
     );
     return;
   }
 
-  // Versioned static assets (?v=19, icons, manifest): Cache-first for 0ms startup
+  // Versioned static assets (?v=23, icons, manifest): Cache-first for 0ms startup
   event.respondWith(
     caches.open(CACHE_NAME).then((cache) =>
       cache.match(request).then((cached) => {
         if (cached) return cached;
         return fetch(request)
           .then((response) => {
-            if (response && response.status === 200) {
+            if (response && response.ok && response.type === 'basic') {
               cache.put(request, response.clone());
             }
             return response;

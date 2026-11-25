@@ -18,6 +18,7 @@
   --radius: 14px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --header-h: calc(109px + var(--safe-top));
 }
 
 *,
@@ -268,7 +269,7 @@ body.sheet-open {
 
 .letter-header {
   position: sticky;
-  top: calc(109px + var(--safe-top));
+  top: var(--header-h);
   z-index: 10;
   background: rgba(250, 250, 250, 0.94);
   backdrop-filter: blur(8px);
@@ -496,6 +497,30 @@ body.sheet-open {
   opacity: 0.9;
 }
 
+.flashcard-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.card-detail-btn {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.card-detail-btn:active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .practice-actions {
   display: flex;
   gap: 10px;
@@ -532,7 +557,7 @@ body.sheet-open {
 .scrubber {
   position: fixed;
   right: max(12px, calc((100vw - 600px) / 2 + 12px));
-  top: calc(122px + var(--safe-top));
+  top: calc(var(--header-h) + 12px);
   bottom: calc(16px + var(--safe-bottom));
   width: 32px;
   z-index: 25;
@@ -668,6 +693,9 @@ body.sheet-open {
   overscroll-behavior: contain;
   touch-action: pan-y;
   animation: slideUp 0.18s ease-out;
+}
+
+.sheet.dragging {
   will-change: transform;
 }
 
@@ -1281,6 +1309,69 @@ body.sheet-open {
 .settings-row-sub {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.analytics-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  padding: 12px 14px;
+}
+
+.analytics-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.analytics-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--success);
+  background: var(--success-soft);
+  padding: 2px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.analytics-stats {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.analytics-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.analytics-pill {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 11px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.analytics-pill:active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.analytics-pill.danger {
+  color: var(--danger);
+  margin-left: auto;
 }
 
 .settings-note {

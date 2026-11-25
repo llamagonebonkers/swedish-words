@@ -3,12 +3,15 @@
 
   const STORAGE_KEY = 'svenska_ord_entries_v2';
   const HIDE_HINTS_KEY = 'svenska_ord_hide_hints_v1';
+  const GRAMMAR_SCHEMA_VERSION = 4;
   const SWEDISH_ALPHABET = [
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
     'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
     'Å', 'Ä', 'Ö'
   ];
   const collator = new Intl.Collator('sv', { sensitivity: 'base' });
+  const sharedDomParser = new DOMParser();
+  const telemetry = window.SwedishWordsTelemetry || null;
   const DAY_MS = 24 * 60 * 60 * 1000;
   const SR_INTERVALS_DAYS = [1, 3, 7, 14, 30];
 
@@ -50,31 +53,52 @@
   const SAMPLE_ID_SET = new Set(SAMPLE_ENTRIES.map((e) => e.id));
 
   // State
-  let entries = loadEntries();
+  let storageHealthy = true;
+  let saveDebounceTimer = null;
+  let saveDirty = false;
+  let searchDebounceTimer = null;
+  let lastLoggedZeroSearchKey = '';
+  let entries = [];
   let hideHints = loadHideHints();
   let activeTab = 'word'; // 'word' | 'phrase' | 'practice'
   let searchQuery = '';
   let selectedEntryId = null;
   let editingEntryId = null;
   let formType = 'word';
+  let formSavedThisSession = false;
   let isScrubbing = false;
   let lastScrubbedLetter = null;
   let popupTimer = null;
   let suppressScrollPopup = false;
   let lastScrolledLetter = null;
+  let lastHighlightedScrubberLetter = null;
   let scrollTicking = false;
+  let cachedLetterGroups = [];
+  let cachedHeaderHeight = 109;
+  const scrubberNodes = new Map();
   let lastFocusedEl = null;
   let pushedModalHistory = false;
+  let modalHistorySeq = 0;
+  let ignoringProgrammaticPop = false;
+  let ignorePopResetTimer = null;
   let lastDeletedEntry = null;
+  let pendingToast = null;
   let toastTimer = null;
   let toastActionHandler = null;
   let translateAbortController = null;
+  let wiktFormAbortController = null;
   let translateReqId = 0;
   let grammarAbortController = null;
   let exampleAbortController = null;
+  const inFlightEnrichments = new Map();
   let duplicateEntryRef = null;
   let suggestedBaseForm = '';
   let pendingExampleEn = '';
+
+  // In-memory search & sort index (never persisted to localStorage)
+  const entryIndexCache = new WeakMap();
+  let sortedByTab = { word: [], phrase: [] };
+  let sortDirty = true;
 
   // Practice State
   let practiceFilter = 'all'; // 'all' | 'word' | 'phrase'
@@ -83,8 +107,10 @@
   let practiceTotalSession = 0;
   let practiceRevealed = false;
   let practiceIgnoreDue = false;
+  let lastShownPracticeId = null;
 
   // Elements
+  const headerEl = document.querySelector('.header');
   const mainEl = document.getElementById('listContainer');
   const searchInput = document.getElementById('searchInput');
   const clearSearchBtn = document.getElementById('clearSearchBtn');
@@ -125,6 +151,7 @@
   const cardTh = document.getElementById('cardTh');
   const cardExample = document.getElementById('cardExample');
   const cardExampleEn = document.getElementById('cardExampleEn');
+  const cardDetailBtn = document.getElementById('cardDetailBtn');
   const practiceRevealWrap = document.getElementById('practiceRevealWrap');
   const revealAnswerBtn = document.getElementById('revealAnswerBtn');
   const practiceRateWrap = document.getElementById('practiceRateWrap');
@@ -194,41 +221,197 @@
   const sampleWordsBtn = document.getElementById('sampleWordsBtn');
   const sampleWordsTitle = document.getElementById('sampleWordsTitle');
   const sampleWordsSub = document.getElementById('sampleWordsSub');
+  const analyticsStats = document.getElementById('analyticsStats');
+  const exportTelemetryJsonBtn = document.getElementById('exportTelemetryJsonBtn');
+  const exportTelemetryCsvBtn = document.getElementById('exportTelemetryCsvBtn');
+  const clearTelemetryBtn = document.getElementById('clearTelemetryBtn');
   const settingsVoiceNote = document.getElementById('settingsVoiceNote');
   const storageNote = document.getElementById('storageNote');
   const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+
+  function generateEntryId() {
+    return 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  function sanitizeEntry(raw, usedIds) {
+    if (!raw || typeof raw !== 'object' || typeof raw.term !== 'string') return null;
+    const term = raw.term.trim();
+    const en = typeof raw.en === 'string' ? raw.en.trim() : '';
+    const th = typeof raw.th === 'string' ? raw.th.trim() : '';
+    if (!term || (!en && !th)) return null;
+
+    let id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : '';
+    if (!id || (usedIds && usedIds.has(id))) {
+      do {
+        id = generateEntryId();
+      } while (usedIds && usedIds.has(id));
+    }
+    if (usedIds) usedIds.add(id);
+
+    const clean = {
+      id,
+      type: raw.type === 'phrase' ? 'phrase' : 'word',
+      term,
+      en,
+      th
+    };
+    const example = typeof raw.example === 'string' ? raw.example.trim() : '';
+    const exampleEn = typeof raw.exampleEn === 'string' ? raw.exampleEn.trim() : '';
+    if (example) clean.example = example;
+    if (example && exampleEn) clean.exampleEn = exampleEn;
+
+    if (raw.grammar && typeof raw.grammar === 'object') {
+      const forms = Array.isArray(raw.grammar.forms)
+        ? raw.grammar.forms
+            .filter((f) => f && typeof f.label === 'string' && typeof f.value === 'string')
+            .map((f) => ({ label: f.label, value: f.value }))
+        : [];
+      const pos = typeof raw.grammar.pos === 'string' ? raw.grammar.pos : '';
+      const baseForm = typeof raw.grammar.baseForm === 'string' ? raw.grammar.baseForm : '';
+      if (pos || forms.length > 0) {
+        clean.grammar = {
+          v: Number(raw.grammar.v) || 1,
+          pos,
+          forms,
+          ...(baseForm ? { baseForm } : {})
+        };
+      }
+    }
+
+    if (raw.sr && typeof raw.sr === 'object') {
+      const reps = Number(raw.sr.reps);
+      const intervalDays = Number(raw.sr.intervalDays);
+      const dueAt = Number(raw.sr.dueAt);
+      if (Number.isFinite(dueAt)) {
+        clean.sr = {
+          reps: Number.isFinite(reps) && reps >= 0 ? reps : 0,
+          intervalDays: Number.isFinite(intervalDays) && intervalDays >= 0 ? intervalDays : 0,
+          dueAt
+        };
+      }
+    }
+
+    return clean;
+  }
+
+  function compactEntryForStorage(item) {
+    const out = {
+      id: item.id,
+      type: item.type === 'phrase' ? 'phrase' : 'word',
+      term: item.term,
+      en: item.en || '',
+      th: item.th || ''
+    };
+    if (item.example) out.example = item.example;
+    if (item.example && item.exampleEn) out.exampleEn = item.exampleEn;
+    if (item.grammar) {
+      out.grammar = {
+        v: item.grammar.v,
+        pos: item.grammar.pos || '',
+        forms: item.grammar.forms || [],
+        ...(item.grammar.baseForm ? { baseForm: item.grammar.baseForm } : {})
+      };
+    }
+    if (item.sr) out.sr = item.sr;
+    return out;
+  }
+
+  function markEntriesMutated() {
+    sortDirty = true;
+  }
+
+  function invalidateEntryIndex(item) {
+    if (item) entryIndexCache.delete(item);
+  }
 
   function loadEntries() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          const sampleMap = new Map(SAMPLE_ENTRIES.map((s) => [s.id, s]));
-          return parsed.map((item) => {
-            if (item && item.example && !item.exampleEn) {
-              const sample = sampleMap.get(item.id);
-              if (sample && sample.example === item.example && sample.exampleEn) {
-                return { ...item, exampleEn: sample.exampleEn };
-              }
+        if (!Array.isArray(parsed)) throw new Error('Invalid root schema');
+        const usedIds = new Set();
+        const sampleMap = new Map(SAMPLE_ENTRIES.map((s) => [s.id, s]));
+        let backfilled = false;
+        const cleanList = [];
+
+        for (const rawItem of parsed) {
+          const item = sanitizeEntry(rawItem, usedIds);
+          if (!item) continue;
+          if (item.example && !item.exampleEn) {
+            const sample = sampleMap.get(item.id);
+            if (sample && sample.example === item.example && sample.exampleEn) {
+              item.exampleEn = sample.exampleEn;
+              backfilled = true;
             }
-            return item;
-          });
+          }
+          cleanList.push(item);
         }
+
+        storageHealthy = true;
+        if (backfilled) {
+          queueMicrotask(() => scheduleSave());
+        }
+        return cleanList;
       }
     } catch (_) {
-      // Ignore storage errors
+      storageHealthy = false;
+      try {
+        const broken = localStorage.getItem(STORAGE_KEY);
+        if (broken) {
+          localStorage.setItem(`${STORAGE_KEY}_corrupt_backup`, broken);
+        }
+      } catch (__) {}
+      queueMicrotask(() => {
+        showToast('Local data could not be read — export or import a backup', { durationMs: 6000 });
+      });
     }
     return [];
   }
 
-  function saveEntries() {
+  function persistEntriesNow() {
+    clearTimeout(saveDebounceTimer);
+    saveDebounceTimer = null;
+    saveDirty = false;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-    } catch (_) {
-      // Ignore quota errors
+      const payload = JSON.stringify(entries.map(compactEntryForStorage));
+      localStorage.setItem(STORAGE_KEY, payload);
+      storageHealthy = true;
+      return true;
+    } catch (err) {
+      storageHealthy = false;
+      const isQuota = err && (err.name === 'QuotaExceededError' || err.code === 22);
+      const msg = isQuota
+        ? 'Device storage is full — export a backup in Settings'
+        : 'Cannot save locally (private mode or blocked storage)';
+      showToast(msg, { durationMs: 6000 });
+      return false;
     }
   }
+
+  function saveEntries() {
+    return persistEntriesNow();
+  }
+
+  function scheduleSave(delayMs = 280) {
+    saveDirty = true;
+    clearTimeout(saveDebounceTimer);
+    saveDebounceTimer = setTimeout(() => {
+      if (saveDirty) persistEntriesNow();
+    }, delayMs);
+  }
+
+  function flushPendingSave() {
+    if (saveDirty) persistEntriesNow();
+  }
+
+  window.addEventListener('pagehide', flushPendingSave);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      flushPendingSave();
+      stopSpeaking();
+    }
+  });
 
   function loadHideHints() {
     try {
@@ -260,11 +443,26 @@
     return (term || '').trim().replace(/^(en|ett)\s+/i, '');
   }
 
+  // Preserves Swedish å, ä, ö for exact deduplication and JSON import
+  function getCanonicalKey(term) {
+    return stripLeadingArticle(term)
+      .normalize('NFC')
+      .toLocaleLowerCase('sv-SE')
+      .replace(/\s+/g, ' ');
+  }
+
+  // Strips Latin accents for tolerant search while preserving Thai ำ (U+0E33) in NFC
   function normalizeForSearch(str) {
     return (str || '')
+      .normalize('NFC')
       .toLocaleLowerCase('sv-SE')
       .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
+      .replace(/[\u0300-\u036f]/g, '')
+      .normalize('NFC');
+  }
+
+  function normalizeThaiForSearch(str) {
+    return (str || '').normalize('NFC').toLowerCase();
   }
 
   function getArticleForItem(item) {
@@ -310,48 +508,108 @@
     return idx === -1 ? SWEDISH_ALPHABET.length : idx;
   }
 
-  function matchesSearch(item, normalizedQ) {
-    if (!normalizedQ) return true;
+  function getEntryIndex(item) {
+    let idx = entryIndexCache.get(item);
+    if (!idx) {
+      const sortTerm = getSortTerm(item.term);
+      idx = {
+        sortTerm,
+        firstLetter: getFirstLetter(item.term),
+        svSearch: normalizeForSearch(item.term),
+        enSearch: item.en ? normalizeForSearch(item.en) : '',
+        thSearch: item.th ? normalizeThaiForSearch(item.th) : '',
+        exSearch: item.example ? normalizeForSearch(item.example) : '',
+        exEnSearch: item.exampleEn ? normalizeForSearch(item.exampleEn) : ''
+      };
+      entryIndexCache.set(item, idx);
+    }
+    return idx;
+  }
+
+  function ensureSortedEntries() {
+    if (!sortDirty) return;
+    const words = [];
+    const phrases = [];
+    for (const item of entries) {
+      getEntryIndex(item);
+      if (item.type === 'phrase') phrases.push(item);
+      else words.push(item);
+    }
+    const cmp = (a, b) => collator.compare(getEntryIndex(a).sortTerm, getEntryIndex(b).sortTerm);
+    words.sort(cmp);
+    phrases.sort(cmp);
+    sortedByTab = { word: words, phrase: phrases };
+    sortDirty = false;
+  }
+
+  function matchesSearch(item, qLatin, qThai) {
+    if (!qLatin) return true;
+    const idx = getEntryIndex(item);
     return (
-      normalizeForSearch(item.term).includes(normalizedQ) ||
-      (item.en && normalizeForSearch(item.en).includes(normalizedQ)) ||
-      (item.th && item.th.toLowerCase().includes(normalizedQ)) ||
-      (item.example && normalizeForSearch(item.example).includes(normalizedQ))
+      idx.svSearch.includes(qLatin) ||
+      (idx.enSearch && idx.enSearch.includes(qLatin)) ||
+      (idx.thSearch && idx.thSearch.includes(qThai)) ||
+      (idx.exSearch && idx.exSearch.includes(qLatin)) ||
+      (idx.exEnSearch && idx.exEnSearch.includes(qLatin))
     );
   }
 
-  function isDueForPractice(item) {
-    return !item.sr || !item.sr.dueAt || item.sr.dueAt <= Date.now();
+  function isDueForPractice(item, now = Date.now()) {
+    return !item.sr || !item.sr.dueAt || item.sr.dueAt <= now;
   }
 
-  function updateCounts() {
-    const nq = normalizeForSearch(searchQuery.trim());
+  // Single-pass count + filtered list over pre-sorted arrays (O(N), zero sorting per keystroke)
+  function computeSearchSnapshot(tabType = activeTab) {
+    ensureSortedEntries();
+    const trimmed = searchQuery.trim();
+    const qLatin = trimmed ? normalizeForSearch(trimmed) : '';
+    const qThai = trimmed ? normalizeThaiForSearch(trimmed) : '';
+    const now = Date.now();
+
     let words = 0;
     let phrases = 0;
     let due = 0;
+    const filtered = [];
 
-    for (const item of entries) {
-      if (isDueForPractice(item)) due++;
-      if (!matchesSearch(item, nq)) continue;
-      if (item.type === 'phrase') phrases++;
-      else words++;
+    for (const item of sortedByTab.word) {
+      if (isDueForPractice(item, now)) due++;
+      if (!qLatin || matchesSearch(item, qLatin, qThai)) {
+        words++;
+        if (tabType === 'word') filtered.push(item);
+      }
+    }
+
+    for (const item of sortedByTab.phrase) {
+      if (isDueForPractice(item, now)) due++;
+      if (!qLatin || matchesSearch(item, qLatin, qThai)) {
+        phrases++;
+        if (tabType === 'phrase') filtered.push(item);
+      }
     }
 
     wordCountEl.textContent = words;
     phraseCountEl.textContent = phrases;
     practiceCountEl.textContent = due;
 
-    wordCountEl.classList.toggle('has-matches', Boolean(nq && words > 0 && activeTab !== 'word'));
-    phraseCountEl.classList.toggle('has-matches', Boolean(nq && phrases > 0 && activeTab !== 'phrase'));
+    wordCountEl.classList.toggle('has-matches', Boolean(qLatin && words > 0 && activeTab !== 'word'));
+    phraseCountEl.classList.toggle('has-matches', Boolean(qLatin && phrases > 0 && activeTab !== 'phrase'));
+
+    return { words, phrases, due, filtered };
+  }
+
+  function updateCounts() {
+    const { words, phrases, due } = computeSearchSnapshot(activeTab);
     return { words, phrases, due };
   }
 
   function getFilteredEntries(tabType = activeTab) {
-    const nq = normalizeForSearch(searchQuery.trim());
-    return entries
-      .filter((item) => item.type === tabType)
-      .filter((item) => matchesSearch(item, nq))
-      .sort((a, b) => collator.compare(getSortTerm(a.term), getSortTerm(b.term)));
+    ensureSortedEntries();
+    const list = tabType === 'phrase' ? sortedByTab.phrase : sortedByTab.word;
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return list;
+    const qLatin = normalizeForSearch(trimmed);
+    const qThai = normalizeThaiForSearch(trimmed);
+    return list.filter((item) => matchesSearch(item, qLatin, qThai));
   }
 
   function applyHintsUI() {
@@ -393,18 +651,25 @@
   }
 
   function addSampleWords() {
-    const existingKeys = new Set(entries.map((e) => normalizeForSearch(stripLeadingArticle(e.term))));
+    const existingKeys = new Set(entries.map((e) => getCanonicalKey(e.term)));
+    const usedIds = new Set(entries.map((e) => e.id));
     let added = 0;
     for (const s of SAMPLE_ENTRIES) {
-      const key = normalizeForSearch(stripLeadingArticle(s.term));
+      const key = getCanonicalKey(s.term);
       if (!existingKeys.has(key)) {
-        entries.push({ ...s });
-        existingKeys.add(key);
-        added++;
+        const copy = sanitizeEntry({ ...s }, usedIds);
+        if (copy) {
+          entries.push(copy);
+          existingKeys.add(key);
+          added++;
+        }
       }
     }
-    saveEntries();
-    render();
+    if (added > 0) {
+      markEntriesMutated();
+      saveEntries();
+      render();
+    }
     showToast(added > 0 ? `Added ${added} sample words & phrases` : 'Sample words already present');
   }
 
@@ -412,13 +677,39 @@
     const before = entries.length;
     entries = entries.filter((e) => !SAMPLE_ID_SET.has(e.id));
     const removed = before - entries.length;
-    saveEntries();
-    render();
+    if (removed > 0) {
+      markEntriesMutated();
+      saveEntries();
+      render();
+    }
     showToast(removed > 0 ? `Removed ${removed} sample items` : 'No sample words to remove');
   }
 
+  // Event delegation for entry cards (1 listener instead of N per render)
+  entriesList.addEventListener('click', (e) => {
+    const card = e.target.closest('.entry-card');
+    if (card && card.dataset.id) {
+      openDetail(card.dataset.id);
+    }
+  });
+
+  // Sync sticky --header-h for letter headers (prevents clipping at large mobile font scales)
+  function syncHeaderHeight() {
+    if (!headerEl) return;
+    const h = Math.round(headerEl.offsetHeight);
+    if (h > 0 && h !== cachedHeaderHeight) {
+      cachedHeaderHeight = h;
+      document.documentElement.style.setProperty('--header-h', `${h}px`);
+    }
+  }
+
+  if (typeof ResizeObserver === 'function' && headerEl) {
+    new ResizeObserver(syncHeaderHeight).observe(headerEl);
+  }
+  window.addEventListener('resize', syncHeaderHeight, { passive: true });
+
   function render() {
-    const counts = updateCounts();
+    const snapshot = computeSearchSnapshot(activeTab);
 
     if (activeTab === 'practice') {
       mainEl.classList.add('practice-mode');
@@ -436,15 +727,24 @@
     scrubber.classList.remove('hidden');
     applyHintsUI();
 
-    const filtered = getFilteredEntries(activeTab);
-    entriesList.innerHTML = '';
+    const filtered = snapshot.filtered;
+    entriesList.textContent = '';
 
     if (filtered.length === 0) {
+      cachedLetterGroups = [];
       emptyState.classList.remove('hidden');
-      emptyActions.innerHTML = '';
+      emptyActions.textContent = '';
       const rawQ = searchQuery.trim();
 
       if (rawQ) {
+        const otherTab = activeTab === 'word' ? 'phrase' : 'word';
+        const otherCount = otherTab === 'word' ? snapshot.words : snapshot.phrases;
+        const zeroKey = `${activeTab}:${rawQ.toLowerCase()}`;
+        if (zeroKey !== lastLoggedZeroSearchKey) {
+          lastLoggedZeroSearchKey = zeroKey;
+          telemetry?.trackSearchZeroHit(rawQ.length, activeTab, otherCount);
+        }
+
         emptyTitle.textContent = 'No matches';
         emptySub.textContent = `Nothing matched "${rawQ}" in ${activeTab === 'word' ? 'Words' : 'Phrases'}.`;
 
@@ -454,12 +754,15 @@
         addQBtn.textContent = `Add "${rawQ}"`;
         addQBtn.addEventListener('click', () => {
           const suggestedType = rawQ.split(/\s+/).length >= 3 ? 'phrase' : activeTab;
-          openForm(null, { prefillTerm: rawQ, prefillType: suggestedType, autoSuggest: true });
+          openForm(null, {
+            prefillTerm: rawQ,
+            prefillType: suggestedType,
+            autoSuggest: true,
+            source: 'search_empty'
+          });
         });
         emptyActions.appendChild(addQBtn);
 
-        const otherTab = activeTab === 'word' ? 'phrase' : 'word';
-        const otherCount = otherTab === 'word' ? counts.words : counts.phrases;
         if (otherCount > 0) {
           const switchBtn = document.createElement('button');
           switchBtn.type = 'button';
@@ -489,11 +792,12 @@
       return;
     }
 
+    lastLoggedZeroSearchKey = '';
     emptyState.classList.add('hidden');
 
     const groups = new Map();
     for (const item of filtered) {
-      const letter = getFirstLetter(item.term);
+      const letter = getEntryIndex(item).firstLetter;
       if (!groups.has(letter)) groups.set(letter, []);
       groups.get(letter).push(item);
     }
@@ -503,6 +807,7 @@
     );
 
     const fragment = document.createDocumentFragment();
+    const groupEls = [];
     for (const letter of sortedLetters) {
       const section = document.createElement('section');
       section.className = 'letter-group';
@@ -524,6 +829,7 @@
 
         const termSpan = document.createElement('span');
         termSpan.className = 'entry-term';
+        termSpan.lang = 'sv';
         renderTermWithArticle(termSpan, item);
         textWrap.appendChild(termSpan);
 
@@ -549,33 +855,52 @@
 
         card.appendChild(textWrap);
         card.appendChild(chevron);
-        card.addEventListener('click', () => openDetail(item.id));
         section.appendChild(card);
       }
 
+      groupEls.push(section);
       fragment.appendChild(section);
     }
 
     entriesList.appendChild(fragment);
+    cachedLetterGroups = groupEls;
     renderScrubber(new Set(sortedLetters));
   }
 
-  function renderScrubber(availableLetters) {
-    scrubber.innerHTML = '';
+  function initScrubber() {
+    if (scrubberNodes.size > 0) return;
+    const frag = document.createDocumentFragment();
     for (const letter of SWEDISH_ALPHABET) {
       const el = document.createElement('span');
-      el.className = 'scrubber-item' + (availableLetters.has(letter) ? ' available' : '');
+      el.className = 'scrubber-item';
       el.dataset.letter = letter;
       el.textContent = letter;
-      scrubber.appendChild(el);
+      scrubberNodes.set(letter, el);
+      frag.appendChild(el);
+    }
+    scrubber.appendChild(frag);
+  }
+
+  function renderScrubber(availableLetters) {
+    initScrubber();
+    for (const [letter, el] of scrubberNodes) {
+      el.classList.toggle('available', availableLetters.has(letter));
     }
   }
 
   function showLetterPopup(letter) {
     letterPopup.textContent = letter;
-    letterPopup.classList.remove('hidden');
-    void letterPopup.offsetWidth;
-    letterPopup.classList.add('visible');
+    const wasHidden = letterPopup.classList.contains('hidden');
+    if (wasHidden) {
+      letterPopup.classList.remove('hidden');
+      requestAnimationFrame(() => {
+        if (!letterPopup.classList.contains('hidden')) {
+          letterPopup.classList.add('visible');
+        }
+      });
+    } else {
+      letterPopup.classList.add('visible');
+    }
 
     clearTimeout(popupTimer);
     if (!isScrubbing) {
@@ -599,14 +924,18 @@
   }
 
   function highlightScrubberLetter(letter) {
-    const items = scrubber.querySelectorAll('.scrubber-item');
-    items.forEach((item) => {
-      item.classList.toggle('current', item.dataset.letter === letter);
-    });
+    if (letter === lastHighlightedScrubberLetter) return;
+    if (lastHighlightedScrubberLetter) {
+      scrubberNodes.get(lastHighlightedScrubberLetter)?.classList.remove('current');
+    }
+    lastHighlightedScrubberLetter = letter;
+    if (letter) {
+      scrubberNodes.get(letter)?.classList.add('current');
+    }
   }
 
   function scrollToLetter(letter) {
-    const groups = Array.from(entriesList.querySelectorAll('.letter-group'));
+    const groups = cachedLetterGroups;
     if (groups.length === 0) return;
 
     const targetOrder = getAlphabetOrder(letter);
@@ -620,8 +949,7 @@
 
     if (targetGroup) {
       suppressScrollPopup = true;
-      const headerHeight = document.querySelector('.header').offsetHeight;
-      const top = targetGroup.getBoundingClientRect().top + window.scrollY - headerHeight - 4;
+      const top = targetGroup.getBoundingClientRect().top + window.scrollY - cachedHeaderHeight - 4;
       window.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
       lastScrolledLetter = targetGroup.dataset.letter;
       setTimeout(() => {
@@ -639,13 +967,12 @@
 
   function handleScrub(clientY) {
     const letter = getLetterAtPointer(clientY);
-    if (letter !== lastScrubbedLetter) {
-      lastScrubbedLetter = letter;
-      if (typeof navigator.vibrate === 'function') {
-        try {
-          navigator.vibrate(8);
-        } catch (_) {}
-      }
+    if (letter === lastScrubbedLetter) return;
+    lastScrubbedLetter = letter;
+    if (typeof navigator.vibrate === 'function') {
+      try {
+        navigator.vibrate(8);
+      } catch (_) {}
     }
     highlightScrubberLetter(letter);
     showLetterPopup(letter);
@@ -703,10 +1030,10 @@
         ) {
           return;
         }
-        const groups = entriesList.querySelectorAll('.letter-group');
+        const groups = cachedLetterGroups;
         if (groups.length === 0) return;
 
-        const headerHeight = document.querySelector('.header').offsetHeight + 16;
+        const headerHeight = cachedHeaderHeight + 16;
         let currentLetter = groups[0].dataset.letter;
 
         for (const group of groups) {
@@ -730,10 +1057,8 @@
     { passive: true }
   );
 
-  // Live Search & Smart Enter
-  searchInput.addEventListener('input', () => {
-    searchQuery = searchInput.value;
-    clearSearchBtn.classList.toggle('hidden', searchQuery.length === 0);
+  // Live Search (debounced for large dictionaries) & Smart Enter
+  function applySearchChange() {
     if (activeTab === 'practice' && searchQuery.trim()) {
       const counts = updateCounts();
       const targetTab = counts.words === 0 && counts.phrases > 0 ? 'phrase' : 'word';
@@ -741,6 +1066,17 @@
       return;
     }
     render();
+  }
+
+  searchInput.addEventListener('input', () => {
+    searchQuery = searchInput.value;
+    clearSearchBtn.classList.toggle('hidden', searchQuery.length === 0);
+    clearTimeout(searchDebounceTimer);
+    if (entries.length > 150 && searchQuery.length > 0) {
+      searchDebounceTimer = setTimeout(applySearchChange, 70);
+    } else {
+      applySearchChange();
+    }
   });
 
   searchInput.addEventListener('keydown', (e) => {
@@ -748,6 +1084,8 @@
     const rawQ = searchInput.value.trim();
     if (!rawQ) return;
     e.preventDefault();
+    clearTimeout(searchDebounceTimer);
+    searchQuery = searchInput.value;
 
     const searchTab = activeTab === 'practice' ? 'word' : activeTab;
     const filtered = getFilteredEntries(searchTab);
@@ -763,16 +1101,26 @@
         searchInput.blur();
         switchTab(otherTab);
         openDetail(otherFiltered[0].id);
-      } else if (otherFiltered.length === 0) {
+      } else if (otherFiltered.length > 1) {
+        searchInput.blur();
+        switchTab(otherTab);
+      } else {
         const suggestedType = rawQ.split(/\s+/).length >= 3 ? 'phrase' : searchTab;
-        openForm(null, { prefillTerm: rawQ, prefillType: suggestedType, autoSuggest: true });
+        openForm(null, {
+          prefillTerm: rawQ,
+          prefillType: suggestedType,
+          autoSuggest: true,
+          source: 'search_empty'
+        });
       }
     }
   });
 
   clearSearchBtn.addEventListener('click', () => {
+    clearTimeout(searchDebounceTimer);
     searchInput.value = '';
     searchQuery = '';
+    lastLoggedZeroSearchKey = '';
     clearSearchBtn.classList.add('hidden');
     searchInput.focus();
     render();
@@ -794,9 +1142,10 @@
   }
 
   function getPracticeCandidates() {
+    const now = Date.now();
     return entries.filter((item) => {
       if (practiceFilter !== 'all' && item.type !== practiceFilter) return false;
-      return practiceIgnoreDue || isDueForPractice(item);
+      return practiceIgnoreDue || isDueForPractice(item, now);
     });
   }
 
@@ -806,6 +1155,10 @@
     practiceDoneCount = 0;
     practiceTotalSession = practiceQueue.length;
     practiceRevealed = false;
+    lastShownPracticeId = null;
+    if (practiceQueue.length > 0) {
+      telemetry?.trackPracticeStart(practiceQueue.length, practiceFilter);
+    }
   }
 
   function renderPracticeView() {
@@ -815,6 +1168,7 @@
 
     const currentItem = practiceQueue.length > 0 ? entryMap.get(practiceQueue[0]) : null;
     if (!currentItem) {
+      lastShownPracticeId = null;
       flashcardWrap.classList.add('hidden');
       practiceDone.classList.remove('hidden');
       practiceProgress.textContent = '';
@@ -833,6 +1187,11 @@
         practiceMoreBtn.classList.remove('hidden');
       }
       return;
+    }
+
+    if (!practiceRevealed && lastShownPracticeId !== currentItem.id) {
+      lastShownPracticeId = currentItem.id;
+      telemetry?.trackCardShown(currentItem);
     }
 
     practiceDone.classList.add('hidden');
@@ -879,6 +1238,7 @@
   function revealPracticeCard() {
     if (practiceRevealed || practiceQueue.length === 0) return;
     practiceRevealed = true;
+    telemetry?.trackCardRevealed();
     renderPracticeView();
     const currentItem = entries.find((e) => e.id === practiceQueue[0]);
     if (currentItem && currentItem.example && !currentItem.exampleEn) {
@@ -893,8 +1253,8 @@
     const item = entries.find((e) => e.id === id);
 
     if (item) {
+      const prevReps = item.sr?.reps || 0;
       if (knewIt) {
-        const prevReps = item.sr?.reps || 0;
         const nextInterval = SR_INTERVALS_DAYS[Math.min(prevReps, SR_INTERVALS_DAYS.length - 1)];
         item.sr = {
           reps: prevReps + 1,
@@ -912,10 +1272,12 @@
         const reinsertAt = Math.min(2, practiceQueue.length);
         practiceQueue.splice(reinsertAt, 0, id);
       }
-      saveEntries();
+      telemetry?.trackCardRated({ ...item, sr: { ...item.sr, reps: prevReps } }, knewIt, practiceQueue.length);
+      scheduleSave(300);
     }
 
     practiceRevealed = false;
+    lastShownPracticeId = null;
     updateCounts();
     renderPracticeView();
   }
@@ -949,6 +1311,12 @@
     const id = practiceQueue[0];
     const item = entries.find((entry) => entry.id === id);
     if (item) speakSwedish(getSpokenTerm(item), cardSpeakBtn);
+  });
+
+  cardDetailBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const id = practiceQueue[0];
+    if (id) openDetail(id);
   });
 
   revealAnswerBtn.addEventListener('click', revealPracticeCard);
@@ -997,7 +1365,7 @@
   function pushModalHistory() {
     if (!pushedModalHistory) {
       try {
-        history.pushState({ swedishWordsModal: true }, '');
+        history.pushState({ swedishWordsModal: true, seq: ++modalHistorySeq }, '');
         pushedModalHistory = true;
       } catch (_) {}
     }
@@ -1006,9 +1374,16 @@
   function popModalHistoryIfNeeded() {
     if (pushedModalHistory) {
       pushedModalHistory = false;
+      ignoringProgrammaticPop = true;
+      clearTimeout(ignorePopResetTimer);
+      ignorePopResetTimer = setTimeout(() => {
+        ignoringProgrammaticPop = false;
+      }, 250);
       try {
         history.back();
-      } catch (_) {}
+      } catch (_) {
+        ignoringProgrammaticPop = false;
+      }
     }
   }
 
@@ -1021,15 +1396,27 @@
     lastFocusedEl = null;
   }
 
-  // Toast helper (supports Undo & Reload actions)
+  // Toast helper (protects active Undo window from being clobbered by background toasts)
+  function flushPendingToast() {
+    if (!pendingToast) return;
+    const next = pendingToast;
+    pendingToast = null;
+    showToast(next.message, next.opts);
+  }
+
   function hideToast() {
     clearTimeout(toastTimer);
     undoToast.classList.add('hidden');
     toastActionHandler = null;
     lastDeletedEntry = null;
+    flushPendingToast();
   }
 
-  function showToast(message, { actionLabel = '', onAction = null, durationMs = 3500 } = {}) {
+  function showToast(message, { actionLabel = '', onAction = null, durationMs = 3500, priority = false } = {}) {
+    if (lastDeletedEntry && !priority) {
+      pendingToast = { message, opts: { actionLabel, onAction, durationMs, priority } };
+      return;
+    }
     clearTimeout(toastTimer);
     undoToastText.textContent = message;
     toastActionHandler = onAction;
@@ -1044,6 +1431,7 @@
       undoToast.classList.add('hidden');
       toastActionHandler = null;
       lastDeletedEntry = null;
+      flushPendingToast();
     }, durationMs);
   }
 
@@ -1052,9 +1440,11 @@
     showToast(`Deleted "${deletedItem.term}"`, {
       actionLabel: 'Undo',
       durationMs: 5000,
+      priority: true,
       onAction: () => {
         if (!lastDeletedEntry) return;
         entries.push(lastDeletedEntry);
+        markEntriesMutated();
         saveEntries();
         hideToast();
         render();
@@ -1073,6 +1463,7 @@
   let swedishVoice = null;
   let voicesChecked = false;
   let activeSpeakingBtn = null;
+  let speechWatchdogTimer = null;
 
   function loadSwedishVoice() {
     if (!supportsSpeech) return;
@@ -1093,15 +1484,22 @@
     cardSpeakBtn.classList.remove('hidden');
   }
 
+  function clearSpeakingVisual(btn = activeSpeakingBtn) {
+    clearTimeout(speechWatchdogTimer);
+    speechWatchdogTimer = null;
+    if (btn) btn.classList.remove('speaking');
+    if (activeSpeakingBtn && activeSpeakingBtn !== btn) {
+      activeSpeakingBtn.classList.remove('speaking');
+    }
+    if (!btn || activeSpeakingBtn === btn) activeSpeakingBtn = null;
+  }
+
   function stopSpeaking() {
     if (!supportsSpeech) return;
     try {
       window.speechSynthesis.cancel();
     } catch (_) {}
-    if (activeSpeakingBtn) {
-      activeSpeakingBtn.classList.remove('speaking');
-      activeSpeakingBtn = null;
-    }
+    clearSpeakingVisual();
   }
 
   function speakSwedish(text, btn) {
@@ -1120,23 +1518,26 @@
     utterance.rate = 0.92;
     if (swedishVoice) utterance.voice = swedishVoice;
 
+    activeSpeakingBtn = btn || null;
+    if (btn) btn.classList.add('speaking');
+
+    // Watchdog prevents stuck .speaking state if mobile Chrome/Safari drops onend
+    const maxSpeechMs = Math.max(4000, Math.min(20000, text.length * 140 + 2500));
+    speechWatchdogTimer = setTimeout(() => {
+      clearSpeakingVisual(btn);
+    }, maxSpeechMs);
+
     utterance.onstart = () => {
-      activeSpeakingBtn = btn;
+      activeSpeakingBtn = btn || null;
       if (btn) btn.classList.add('speaking');
     };
-    utterance.onend = () => {
-      if (btn) btn.classList.remove('speaking');
-      if (activeSpeakingBtn === btn) activeSpeakingBtn = null;
-    };
-    utterance.onerror = () => {
-      if (btn) btn.classList.remove('speaking');
-      if (activeSpeakingBtn === btn) activeSpeakingBtn = null;
-    };
+    utterance.onend = () => clearSpeakingVisual(btn);
+    utterance.onerror = () => clearSpeakingVisual(btn);
 
     try {
       window.speechSynthesis.speak(utterance);
     } catch (_) {
-      if (btn) btn.classList.remove('speaking');
+      clearSpeakingVisual(btn);
     }
   }
 
@@ -1206,18 +1607,30 @@
       exampleAbortController.abort();
       exampleAbortController = null;
     }
+    const entryId = item.id;
     const ex = (item.example || '').trim();
     if (!ex || item.exampleEn) return;
 
-    // Instant offline backfill if this matches a built-in sample entry
-    const sampleMatch = SAMPLE_ENTRIES.find((s) => s.id === item.id && s.example === ex && s.exampleEn);
-    if (sampleMatch) {
-      item.exampleEn = sampleMatch.exampleEn;
-      saveEntries();
-      if (selectedEntryId === item.id) {
-        detailExampleEn.textContent = sampleMatch.exampleEn;
+    function applyExampleEnToUI(translatedEn) {
+      const liveItem = entries.find((e) => e.id === entryId);
+      if (!liveItem || (liveItem.example || '').trim() !== ex) return;
+      liveItem.exampleEn = translatedEn;
+      invalidateEntryIndex(liveItem);
+      scheduleSave(300);
+      if (selectedEntryId === entryId) {
+        detailExampleEn.textContent = translatedEn;
         detailExampleEn.classList.remove('hidden');
       }
+      if (activeTab === 'practice' && practiceRevealed && practiceQueue[0] === entryId) {
+        cardExampleEn.textContent = translatedEn;
+        cardExampleEn.classList.remove('hidden');
+      }
+    }
+
+    // Instant offline backfill if this matches a built-in sample entry
+    const sampleMatch = SAMPLE_ENTRIES.find((s) => s.id === entryId && s.example === ex && s.exampleEn);
+    if (sampleMatch) {
+      applyExampleEnToUI(sampleMatch.exampleEn);
       return;
     }
 
@@ -1228,16 +1641,7 @@
       const res = await translateWithDict(ex, 'sv', 'en', controller.signal);
       if (controller.signal.aborted) return;
       if (res.primary) {
-        item.exampleEn = res.primary;
-        saveEntries();
-        if (selectedEntryId === item.id) {
-          detailExampleEn.textContent = res.primary;
-          detailExampleEn.classList.remove('hidden');
-        }
-        if (activeTab === 'practice' && practiceRevealed && practiceQueue[0] === item.id) {
-          cardExampleEn.textContent = res.primary;
-          cardExampleEn.classList.remove('hidden');
-        }
+        applyExampleEnToUI(res.primary);
       }
     } catch (_) {
     } finally {
@@ -1354,7 +1758,8 @@
 
   // Wiktionary parsing helpers (base form, examples, grammar tables)
   function stripHtml(html) {
-    const doc = new DOMParser().parseFromString(html || '', 'text/html');
+    if (!html) return '';
+    const doc = sharedDomParser.parseFromString(html, 'text/html');
     return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
@@ -1373,7 +1778,7 @@
       const defs = Array.isArray(block.definitions) ? block.definitions : [];
       for (const def of defs) {
         if (!baseForm && def.definition && def.definition.includes('form-of-definition')) {
-          const doc = new DOMParser().parseFromString(def.definition, 'text/html');
+          const doc = sharedDomParser.parseFromString(def.definition, 'text/html');
           const link = doc.querySelector('.form-of-definition-link a');
           const lemma = (link?.textContent || '').trim();
           if (lemma && lemma.toLocaleLowerCase('sv-SE') !== srcLower) {
@@ -1573,7 +1978,8 @@
   }
 
   function parseSvWiktionaryHtml(html, preferredPos) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
+    if (!html || !html.includes('grammar')) return null;
+    const doc = sharedDomParser.parseFromString(html, 'text/html');
     const tables = Array.from(doc.querySelectorAll('table.grammar')).filter(isSwedishGrammarTable);
     if (tables.length === 0) return null;
 
@@ -1659,7 +2065,7 @@
     }
 
     if (!pos && forms.length === 0) return null;
-    return { v: 4, pos, forms, baseForm: baseForm || '' };
+    return { v: GRAMMAR_SCHEMA_VERSION, pos, forms, baseForm: baseForm || '' };
   }
 
   async function loadAndRenderGrammar(item) {
@@ -1668,50 +2074,73 @@
       grammarAbortController = null;
     }
 
+    const entryId = item.id;
+    const expectedTerm = item.term;
     const baseTerm = stripLeadingArticle(item.term);
     if (item.type !== 'word' || baseTerm.includes(' ')) {
       detailGrammarWrap.classList.add('hidden');
       return;
     }
 
-    if (item.grammar && item.grammar.v >= 3) {
+    if (item.grammar && item.grammar.v >= GRAMMAR_SCHEMA_VERSION) {
       renderGrammarData(item.grammar);
       return;
     }
 
     if (!navigator.onLine) {
-      detailGrammarWrap.classList.add('hidden');
+      if (item.grammar && (item.grammar.pos || item.grammar.forms?.length)) {
+        renderGrammarData(item.grammar);
+      } else {
+        detailGrammarWrap.classList.add('hidden');
+      }
       return;
     }
 
     detailPos.classList.add('hidden');
-    detailForms.innerHTML = '';
+    detailForms.textContent = '';
     detailGrammarTitle.textContent = 'Grammar & forms';
     detailGrammarStatus.textContent = 'Loading grammar...';
     detailGrammarStatus.classList.remove('hidden');
     detailGrammarWrap.classList.remove('hidden');
 
+    // If background enrichment is already running for this exact entry, wait for it instead of duplicating requests
+    if (inFlightEnrichments.has(entryId)) {
+      try {
+        await inFlightEnrichments.get(entryId);
+      } catch (_) {}
+      const refreshed = entries.find((e) => e.id === entryId);
+      if (selectedEntryId === entryId && refreshed?.grammar?.v >= GRAMMAR_SCHEMA_VERSION) {
+        renderTermWithArticle(detailTerm, refreshed);
+        renderGrammarData(refreshed.grammar);
+        return;
+      }
+    }
+
     const controller = new AbortController();
     grammarAbortController = controller;
 
     try {
-      const grammar = await fetchWiktionaryGrammar(item.term, controller.signal);
+      const grammar = await fetchWiktionaryGrammar(expectedTerm, controller.signal);
       if (controller.signal.aborted) return;
+      const liveItem = entries.find((e) => e.id === entryId);
+      if (!liveItem || liveItem.term !== expectedTerm) return;
       if (grammar) {
-        item.grammar = grammar;
-        saveEntries();
+        liveItem.grammar = grammar;
+        scheduleSave(300);
         // Refresh list & detail heading in case Noun (en)/(ett) was just discovered
-        if (selectedEntryId === item.id) {
-          renderTermWithArticle(detailTerm, item);
+        if (selectedEntryId === entryId) {
+          renderTermWithArticle(detailTerm, liveItem);
         }
         render();
       }
-      if (selectedEntryId === item.id) {
-        renderGrammarData(grammar);
+      if (selectedEntryId === entryId) {
+        renderGrammarData(grammar || liveItem.grammar);
       }
     } catch (_) {
-      if (!controller.signal.aborted && selectedEntryId === item.id) {
-        detailGrammarWrap.classList.add('hidden');
+      if (!controller.signal.aborted && selectedEntryId === entryId) {
+        const liveItem = entries.find((e) => e.id === entryId);
+        if (liveItem?.grammar) renderGrammarData(liveItem.grammar);
+        else detailGrammarWrap.classList.add('hidden');
       }
     } finally {
       if (grammarAbortController === controller) grammarAbortController = null;
@@ -1757,20 +2186,19 @@
     const deletedItem = entries.find((e) => e.id === selectedEntryId);
     if (!deletedItem) return;
     entries = entries.filter((e) => e.id !== selectedEntryId);
+    markEntriesMutated();
     saveEntries();
     closeDetail();
     render();
     showUndoToast(deletedItem);
   });
 
-  // Duplicate detection helper
+  // Duplicate detection helper (preserves Swedish å, ä, ö)
   function findDuplicate(term, excludeId = null) {
-    const key = normalizeForSearch(stripLeadingArticle(term));
+    const key = getCanonicalKey(term);
     if (!key) return null;
     return (
-      entries.find(
-        (e) => e.id !== excludeId && normalizeForSearch(stripLeadingArticle(e.term)) === key
-      ) || null
+      entries.find((e) => e.id !== excludeId && getCanonicalKey(e.term) === key) || null
     );
   }
 
@@ -1787,7 +2215,7 @@
 
   editDuplicateBtn.addEventListener('click', () => {
     if (!duplicateEntryRef) return;
-    openForm(duplicateEntryRef);
+    openForm(duplicateEntryRef, { source: 'duplicate_notice' });
   });
 
   useBaseFormBtn.addEventListener('click', () => {
@@ -1820,26 +2248,34 @@
   });
 
   function clearFormSuggestions() {
-    svSuggestions.innerHTML = '';
+    svSuggestions.textContent = '';
     svSuggestions.classList.add('hidden');
-    enSuggestions.innerHTML = '';
+    enSuggestions.textContent = '';
     enSuggestions.classList.add('hidden');
-    thSuggestions.innerHTML = '';
+    thSuggestions.textContent = '';
     thSuggestions.classList.add('hidden');
-    exampleSuggestions.innerHTML = '';
+    exampleSuggestions.textContent = '';
     exampleSuggestions.classList.add('hidden');
     baseFormNotice.classList.add('hidden');
     suggestedBaseForm = '';
     pendingExampleEn = '';
   }
 
-  function openForm(existingItem = null, { prefillTerm = '', prefillType = null, autoSuggest = false } = {}) {
+  function openForm(
+    existingItem = null,
+    { prefillTerm = '', prefillType = null, autoSuggest = false, source = '' } = {}
+  ) {
     if (!lastFocusedEl) lastFocusedEl = document.activeElement;
     if (translateAbortController) {
       translateAbortController.abort();
       translateAbortController = null;
     }
+    if (wiktFormAbortController) {
+      wiktFormAbortController.abort();
+      wiktFormAbortController = null;
+    }
     translateReqId++;
+    formSavedThisSession = false;
     formError.classList.add('hidden');
     translateStatus.classList.add('hidden');
     translateStatus.classList.remove('error');
@@ -1866,6 +2302,8 @@
       exampleInput.value = '';
     }
 
+    telemetry?.trackFormOpen(source || (existingItem ? 'edit' : 'fab'));
+
     updateDuplicateNotice();
     formSheet.style.transform = '';
     formSheet.style.transition = '';
@@ -1881,12 +2319,25 @@
     }, 60);
   }
 
-  function closeForm({ fromPopstate = false } = {}) {
+  function closeForm({ fromPopstate = false, saved = false } = {}) {
     if (translateAbortController) {
       translateAbortController.abort();
       translateAbortController = null;
     }
+    if (wiktFormAbortController) {
+      wiktFormAbortController.abort();
+      wiktFormAbortController = null;
+    }
     translateReqId++;
+    if (!formSavedThisSession) {
+      telemetry?.trackFormClose({
+        saved: Boolean(saved),
+        hasTerm: Boolean(termInput.value.trim()),
+        hasEn: Boolean(enInput.value.trim()),
+        hasTh: Boolean(thInput.value.trim())
+      });
+      formSavedThisSession = true;
+    }
     formBackdrop.classList.add('hidden');
     formSheet.style.transform = '';
     formSheet.style.transition = '';
@@ -1899,7 +2350,7 @@
     restoreFocus();
   }
 
-  addBtn.addEventListener('click', () => openForm(null));
+  addBtn.addEventListener('click', () => openForm(null, { source: 'fab' }));
   cancelFormBtn.addEventListener('click', () => closeForm());
   formBackdrop.addEventListener('click', (e) => {
     if (e.target === formBackdrop) closeForm();
@@ -1937,52 +2388,82 @@
     exampleSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
   });
 
-  async function enrichEntryInBackground(entry) {
-    if (!entry || !navigator.onLine) return;
-    let changed = false;
-    const tasks = [];
+  function enrichEntryInBackground(entryId, expectedTerm, expectedExample) {
+    if (!entryId || !navigator.onLine) return Promise.resolve();
+    if (inFlightEnrichments.has(entryId)) return inFlightEnrichments.get(entryId);
 
-    const baseTerm = stripLeadingArticle(entry.term);
-    if (entry.type === 'word' && baseTerm && !baseTerm.includes(' ') && (!entry.grammar || entry.grammar.v < 3)) {
-      tasks.push(
-        fetchWiktionaryGrammar(entry.term)
-          .then((grammar) => {
-            if (grammar) {
-              entry.grammar = grammar;
-              changed = true;
-            }
-          })
-          .catch(() => {})
-      );
-    }
+    const run = (async () => {
+      const initial = entries.find((e) => e.id === entryId);
+      if (!initial || initial.term !== expectedTerm) return;
 
-    if (entry.example && !entry.exampleEn) {
-      tasks.push(
-        translateWithDict(entry.example, 'sv', 'en')
-          .then((res) => {
-            if (res?.primary) {
-              entry.exampleEn = res.primary;
-              changed = true;
-            }
-          })
-          .catch(() => {})
-      );
-    }
+      let fetchedGrammar = null;
+      let fetchedExampleEn = '';
+      const tasks = [];
 
-    if (tasks.length === 0) return;
-    await Promise.allSettled(tasks);
-    if (changed) {
-      saveEntries();
-      if (selectedEntryId === entry.id) {
-        renderTermWithArticle(detailTerm, entry);
-        if (entry.exampleEn) {
-          detailExampleEn.textContent = entry.exampleEn;
-          detailExampleEn.classList.remove('hidden');
-        }
-        if (entry.grammar) renderGrammarData(entry.grammar);
+      const baseTerm = stripLeadingArticle(initial.term);
+      if (
+        initial.type === 'word' &&
+        baseTerm &&
+        !baseTerm.includes(' ') &&
+        (!initial.grammar || initial.grammar.v < GRAMMAR_SCHEMA_VERSION)
+      ) {
+        tasks.push(
+          fetchWiktionaryGrammar(initial.term)
+            .then((grammar) => {
+              if (grammar) fetchedGrammar = grammar;
+            })
+            .catch(() => {})
+        );
       }
-      render();
-    }
+
+      if (expectedExample && !initial.exampleEn) {
+        tasks.push(
+          translateWithDict(expectedExample, 'sv', 'en')
+            .then((res) => {
+              if (res?.primary) fetchedExampleEn = res.primary;
+            })
+            .catch(() => {})
+        );
+      }
+
+      if (tasks.length === 0) return;
+      await Promise.allSettled(tasks);
+
+      // Re-resolve live entry by ID to prevent mutating deleted or edited stale objects
+      const liveEntry = entries.find((e) => e.id === entryId);
+      if (!liveEntry) return;
+
+      let changed = false;
+      if (fetchedGrammar && liveEntry.term === expectedTerm && liveEntry.type === 'word') {
+        liveEntry.grammar = fetchedGrammar;
+        changed = true;
+      }
+      if (fetchedExampleEn && (liveEntry.example || '').trim() === expectedExample && !liveEntry.exampleEn) {
+        liveEntry.exampleEn = fetchedExampleEn;
+        invalidateEntryIndex(liveEntry);
+        changed = true;
+      }
+
+      if (changed) {
+        scheduleSave(300);
+        if (selectedEntryId === entryId) {
+          renderTermWithArticle(detailTerm, liveEntry);
+          if (liveEntry.exampleEn) {
+            detailExampleEn.textContent = liveEntry.exampleEn;
+            detailExampleEn.classList.remove('hidden');
+          }
+          if (liveEntry.grammar) renderGrammarData(liveEntry.grammar);
+        }
+        render();
+      }
+    })().finally(() => {
+      if (inFlightEnrichments.get(entryId) === run) {
+        inFlightEnrichments.delete(entryId);
+      }
+    });
+
+    inFlightEnrichments.set(entryId, run);
+    return run;
   }
 
   termInput.addEventListener('input', () => {
@@ -2013,8 +2494,10 @@
     if (editingEntryId) {
       entries = entries.map((item) => {
         if (item.id !== editingEntryId) return item;
-        const termChanged = item.term.trim().toLowerCase() !== term.toLowerCase();
+        const termChanged =
+          item.term.trim().toLocaleLowerCase('sv-SE') !== term.toLocaleLowerCase('sv-SE');
         const exampleChanged = (item.example || '').trim() !== example;
+        const clearGrammar = termChanged || formType !== 'word';
         savedEntry = {
           ...item,
           type: formType,
@@ -2023,12 +2506,12 @@
           th,
           example,
           exampleEn: example ? (exampleChanged ? pendingExampleEn : item.exampleEn || pendingExampleEn) : '',
-          grammar: termChanged ? undefined : item.grammar
+          grammar: clearGrammar ? undefined : item.grammar
         };
         return savedEntry;
       });
     } else {
-      const id = 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const id = generateEntryId();
       savedEntry = {
         id,
         type: formType,
@@ -2041,15 +2524,25 @@
       entries.push(savedEntry);
     }
 
+    markEntriesMutated();
     saveEntries();
 
     if (isNewEntry && searchQuery.trim()) {
+      clearTimeout(searchDebounceTimer);
       searchInput.value = '';
       searchQuery = '';
+      lastLoggedZeroSearchKey = '';
       clearSearchBtn.classList.add('hidden');
     }
 
-    if (activeTab !== formType) {
+    if (activeTab !== 'practice' && activeTab !== formType) {
+      activeTab = formType;
+      tabs.forEach((t) => {
+        const active = t.dataset.tab === activeTab;
+        t.classList.toggle('active', active);
+        t.setAttribute('aria-selected', String(active));
+      });
+    } else if (isNewEntry && activeTab === 'practice') {
       activeTab = formType;
       tabs.forEach((t) => {
         const active = t.dataset.tab === activeTab;
@@ -2058,14 +2551,37 @@
       });
     }
 
-    closeForm();
+    closeForm({ saved: true });
     render();
     if (savedEntry) {
-      enrichEntryInBackground(savedEntry);
+      enrichEntryInBackground(savedEntry.id, savedEntry.term, savedEntry.example || '');
     }
   });
 
   // Settings & Backup Sheet
+  function updateAnalyticsSummaryUI() {
+    if (!analyticsStats) return;
+    if (!telemetry) {
+      analyticsStats.textContent = 'Local analytics unavailable.';
+      return;
+    }
+    const s = telemetry.getSummary();
+    const parts = [`${s.sessions} ${s.sessions === 1 ? 'session' : 'sessions'}`];
+    if (s.avgSessionSec > 0) {
+      parts.push(`avg ${s.avgSessionSec}s`);
+    }
+    if (s.totalRated > 0 && s.accuracyPct !== null) {
+      parts.push(`${s.accuracyPct}% recall (${s.totalRated} cards)`);
+    }
+    if (s.hardestPos) {
+      parts.push(`hardest: ${s.hardestPos.pos} (${s.hardestPos.errorRatePct}% again)`);
+    }
+    if (s.swCacheHitRatePct !== null) {
+      parts.push(`cache ${s.swCacheHitRatePct}%`);
+    }
+    analyticsStats.textContent = parts.join(' · ');
+  }
+
   function updateSettingsUI() {
     const hasSamples = entries.some((e) => SAMPLE_ID_SET.has(e.id));
     if (hasSamples) {
@@ -2075,6 +2591,7 @@
       sampleWordsTitle.textContent = 'Add sample words';
       sampleWordsSub.textContent = 'Add starter Swedish words & phrases';
     }
+    updateAnalyticsSummaryUI();
     loadSwedishVoice();
   }
 
@@ -2115,36 +2632,23 @@
     updateSettingsUI();
   });
 
-  exportBtn.addEventListener('click', async () => {
-    const payload = {
-      app: 'Swedish Words',
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      entries
-    };
-    const json = JSON.stringify(payload, null, 2);
-    const dateStr = new Date().toISOString().slice(0, 10);
-    const filename = `swedish-words-backup-${dateStr}.json`;
-
+  async function shareOrDownloadFile(content, filename, mimeType, shareTitle, toastMessage) {
     try {
-      const file = new File([json], filename, { type: 'application/json' });
+      const file = new File([content], filename, { type: mimeType });
       if (
         typeof navigator.share === 'function' &&
         typeof navigator.canShare === 'function' &&
         navigator.canShare({ files: [file] })
       ) {
-        await navigator.share({
-          title: 'Swedish Words Backup',
-          files: [file]
-        });
-        showToast(`Shared backup (${entries.length} items)`);
+        await navigator.share({ title: shareTitle, files: [file] });
+        showToast(toastMessage);
         return;
       }
     } catch (err) {
       if (err && err.name === 'AbortError') return;
     }
 
-    const blob = new Blob([json], { type: 'application/json' });
+    const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -2153,7 +2657,57 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast(`Exported ${entries.length} items`);
+    showToast(toastMessage);
+  }
+
+  exportBtn.addEventListener('click', async () => {
+    const payload = {
+      app: 'Swedish Words',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      entries: entries.map(compactEntryForStorage)
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `swedish-words-backup-${dateStr}.json`;
+    await shareOrDownloadFile(
+      json,
+      filename,
+      'application/json',
+      'Swedish Words Backup',
+      `Exported ${entries.length} items`
+    );
+  });
+
+  exportTelemetryJsonBtn?.addEventListener('click', async () => {
+    if (!telemetry) return;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    await shareOrDownloadFile(
+      telemetry.exportJSON(),
+      `swedish-words-analytics-${dateStr}.json`,
+      'application/json',
+      'Swedish Words Analytics (JSON)',
+      'Exported local analytics (JSON)'
+    );
+  });
+
+  exportTelemetryCsvBtn?.addEventListener('click', async () => {
+    if (!telemetry) return;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    await shareOrDownloadFile(
+      telemetry.exportCSV(),
+      `swedish-words-analytics-${dateStr}.csv`,
+      'text/csv;charset=utf-8',
+      'Swedish Words Analytics (CSV)',
+      'Exported local analytics (CSV)'
+    );
+  });
+
+  clearTelemetryBtn?.addEventListener('click', () => {
+    if (!telemetry) return;
+    telemetry.clear();
+    updateAnalyticsSummaryUI();
+    showToast('Local analytics cleared');
   });
 
   importBtn.addEventListener('click', () => {
@@ -2173,33 +2727,25 @@
         return;
       }
 
-      const existingKeys = new Set(entries.map((e) => normalizeForSearch(stripLeadingArticle(e.term))));
+      const existingKeys = new Set(entries.map((e) => getCanonicalKey(e.term)));
+      const usedIds = new Set(entries.map((e) => e.id));
       let added = 0;
       for (const raw of list) {
-        if (!raw || typeof raw.term !== 'string' || !raw.term.trim()) continue;
-        const en = typeof raw.en === 'string' ? raw.en.trim() : '';
-        const th = typeof raw.th === 'string' ? raw.th.trim() : '';
-        if (!en && !th) continue;
-        const key = normalizeForSearch(stripLeadingArticle(raw.term));
+        const clean = sanitizeEntry(raw, usedIds);
+        if (!clean) continue;
+        const key = getCanonicalKey(clean.term);
         if (existingKeys.has(key)) continue;
 
-        entries.push({
-          id: raw.id || 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-          type: raw.type === 'phrase' ? 'phrase' : 'word',
-          term: raw.term.trim(),
-          en,
-          th,
-          example: typeof raw.example === 'string' ? raw.example.trim() : '',
-          exampleEn: typeof raw.exampleEn === 'string' ? raw.exampleEn.trim() : '',
-          grammar: raw.grammar || undefined,
-          sr: raw.sr || undefined
-        });
+        entries.push(clean);
         existingKeys.add(key);
         added++;
       }
 
-      saveEntries();
-      render();
+      if (added > 0) {
+        markEntriesMutated();
+        saveEntries();
+        render();
+      }
       updateSettingsUI();
       closeSettings();
       showToast(added > 0 ? `Imported ${added} new ${added === 1 ? 'item' : 'items'}` : 'All items already in your list');
@@ -2208,8 +2754,13 @@
     }
   });
 
-  // Back button & Escape handling
+  // Back button, Escape & Practice keyboard shortcuts
   window.addEventListener('popstate', () => {
+    if (ignoringProgrammaticPop) {
+      ignoringProgrammaticPop = false;
+      clearTimeout(ignorePopResetTimer);
+      return;
+    }
     if (!formBackdrop.classList.contains('hidden')) {
       pushedModalHistory = false;
       closeForm({ fromPopstate: true });
@@ -2227,10 +2778,29 @@
       if (!formBackdrop.classList.contains('hidden')) closeForm();
       else if (!detailBackdrop.classList.contains('hidden')) closeDetail();
       else if (!settingsBackdrop.classList.contains('hidden')) closeSettings();
+      return;
+    }
+
+    if (activeTab !== 'practice' || isAnySheetOpen() || practiceQueue.length === 0) return;
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+    if (!practiceRevealed && (e.key === ' ' || e.key === 'Enter')) {
+      if (document.activeElement === flashcard || document.activeElement === revealAnswerBtn) return;
+      e.preventDefault();
+      revealPracticeCard();
+    } else if (practiceRevealed) {
+      if (e.key === '1' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        ratePracticeCard(false);
+      } else if (e.key === '2' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        ratePracticeCard(true);
+      }
     }
   });
 
-  // Swipe-to-dismiss on all bottom sheets (with Samsung pull-to-refresh prevention)
+  // Swipe-to-dismiss on all bottom sheets (with Samsung pull-to-refresh prevention & re-entrancy guard)
   function enableSheetSwipeDismiss(backdrop, sheet, onClose) {
     let startY = 0;
     let startTime = 0;
@@ -2238,6 +2808,7 @@
     let tracking = false;
     let dragging = false;
     let activeMode = null;
+    let dismissTimer = null;
 
     function canStart(target) {
       const onHandle = Boolean(target.closest('.sheet-handle-zone, .sheet-handle'));
@@ -2257,6 +2828,7 @@
     function finishDrag() {
       if (!dragging) return;
       dragging = false;
+      sheet.classList.remove('dragging');
 
       const elapsed = Math.max(1, Date.now() - startTime);
       const velocity = currentY / elapsed;
@@ -2264,7 +2836,13 @@
         sheet.style.transition = 'transform 0.16s ease-out';
         sheet.style.transform = 'translateY(100%)';
         backdrop.style.background = 'rgba(17, 24, 39, 0)';
-        setTimeout(() => onClose(), 150);
+        clearTimeout(dismissTimer);
+        dismissTimer = setTimeout(() => {
+          dismissTimer = null;
+          if (!backdrop.classList.contains('hidden')) {
+            onClose();
+          }
+        }, 150);
       } else {
         sheet.style.transition = 'transform 0.18s ease-out';
         sheet.style.transform = 'translateY(0)';
@@ -2286,6 +2864,8 @@
         if (e.touches.length !== 1) return;
         const check = canStart(e.target);
         if (!check.allowed) return;
+        clearTimeout(dismissTimer);
+        dismissTimer = null;
         tracking = true;
         dragging = false;
         activeMode = 'touch';
@@ -2311,6 +2891,7 @@
             return;
           }
           dragging = true;
+          sheet.classList.add('dragging');
           sheet.style.transition = 'none';
         }
         if (e.cancelable) e.preventDefault();
@@ -2335,6 +2916,8 @@
       const check = canStart(e.target);
       if (!check.allowed) return;
 
+      clearTimeout(dismissTimer);
+      dismissTimer = null;
       tracking = true;
       dragging = false;
       activeMode = 'pointer';
@@ -2361,6 +2944,7 @@
           return;
         }
         dragging = true;
+        sheet.classList.add('dragging');
         sheet.style.transition = 'none';
       }
       applyDrag(deltaY);
@@ -2433,10 +3017,12 @@
 
   async function translateWithDict(text, fromLang, toLang, signal) {
     try {
-      return await fetchGoogleDict(text, fromLang, toLang, signal);
+      const res = await fetchGoogleDict(text, fromLang, toLang, signal);
+      return { ...res, provider: 'google' };
     } catch (err) {
       if (signal && signal.aborted) throw err;
-      return await fetchMyMemoryFallback(text, fromLang, toLang, signal);
+      const res = await fetchMyMemoryFallback(text, fromLang, toLang, signal);
+      return { ...res, provider: 'mymemory' };
     }
   }
 
@@ -2628,15 +3214,20 @@
     translateThaiFromEnglish(enText);
   });
 
-  async function fetchWiktionaryFormSuggestions(svText, req) {
+  async function fetchWiktionaryFormSuggestions(svText) {
     const clean = stripLeadingArticle(svText).toLocaleLowerCase('sv-SE');
     if (!clean || clean.includes(' ')) return;
+    if (wiktFormAbortController) {
+      wiktFormAbortController.abort();
+    }
+    const controller = new AbortController();
+    wiktFormAbortController = controller;
     try {
       const data = await fetchWithTimeout(
         `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(clean)}`,
-        { signal: req.signal, timeoutMs: 7000 }
+        { signal: controller.signal, timeoutMs: 7000 }
       ).then((r) => (r.ok ? r.json() : null));
-      if (!data || req.reqId !== translateReqId || req.signal.aborted) return;
+      if (!data || controller.signal.aborted || formBackdrop.classList.contains('hidden')) return;
 
       const hints = extractWiktionaryHints(data, clean);
       if (hints.baseForm) {
@@ -2647,7 +3238,10 @@
       if (hints.examples.length > 0 && !exampleInput.value.trim()) {
         renderExampleSuggestions(hints.examples);
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      if (wiktFormAbortController === controller) wiktFormAbortController = null;
+    }
   }
 
   suggestBtn.addEventListener('click', async () => {
@@ -2671,6 +3265,8 @@
     }
 
     const req = startTranslateRequest();
+    const t0 = performance.now();
+    const dir = !svText ? (enText ? 'en->sv' : 'th->sv') : 'sv->en';
     formError.classList.add('hidden');
     suggestBtn.disabled = true;
     suggestBtn.textContent = 'Searching...';
@@ -2701,12 +3297,18 @@
         const svCandidates = buildCandidateList(svResult, sourceForSv, 5);
         suggestBtn.disabled = false;
         suggestBtn.textContent = 'Suggest';
+        telemetry?.trackSuggestResult({
+          dir,
+          ok: svCandidates.length > 0,
+          ms: performance.now() - t0,
+          provider: svResult.provider || 'google'
+        });
 
         if (svCandidates.length > 0) {
           termInput.value = svCandidates[0].text;
           updateDuplicateNotice();
           renderSwedishChips(svCandidates);
-          fetchWiktionaryFormSuggestions(svCandidates[0].text, req);
+          fetchWiktionaryFormSuggestions(svCandidates[0].text);
           if (!thText && englishSource) {
             await translateThaiFromEnglish(englishSource, req);
           } else {
@@ -2721,13 +3323,19 @@
 
       // Forward Suggest: Swedish -> English -> Thai (+ Wiktionary base form & examples)
       translateStatus.textContent = 'Finding English options...';
-      fetchWiktionaryFormSuggestions(svText, req);
+      fetchWiktionaryFormSuggestions(svText);
 
       const enResult = await translateWithDict(svText, 'sv', 'en', req.signal);
       if (req.reqId !== translateReqId || req.signal.aborted) return;
       const candidates = buildCandidateList(enResult, svText, 5);
       suggestBtn.disabled = false;
       suggestBtn.textContent = 'Suggest';
+      telemetry?.trackSuggestResult({
+        dir,
+        ok: candidates.length > 0,
+        ms: performance.now() - t0,
+        provider: enResult.provider || 'google'
+      });
 
       if (candidates.length > 0) {
         renderEnglishChips(candidates);
@@ -2739,11 +3347,14 @@
       }
     } catch (_) {
       if (req.reqId !== translateReqId || req.signal.aborted) return;
+      telemetry?.trackSuggestResult({ dir, ok: false, ms: performance.now() - t0, provider: 'none' });
       translateStatus.textContent = 'Could not fetch suggestions right now.';
       translateStatus.classList.add('error');
     } finally {
-      suggestBtn.disabled = false;
-      suggestBtn.textContent = 'Suggest';
+      if (req.reqId === translateReqId) {
+        suggestBtn.disabled = false;
+        suggestBtn.textContent = 'Suggest';
+      }
     }
   });
 
@@ -2760,7 +3371,8 @@
         openForm(null, {
           prefillTerm: cleaned,
           prefillType: wordCount >= 3 ? 'phrase' : 'word',
-          autoSuggest: true
+          autoSuggest: true,
+          source: 'share_target'
         });
         return;
       }
@@ -2768,7 +3380,7 @@
       const action = params.get('action');
       if (action === 'add') {
         history.replaceState(null, '', window.location.pathname);
-        openForm(null);
+        openForm(null, { source: 'shortcut' });
       } else if (action === 'practice') {
         history.replaceState(null, '', window.location.pathname);
         switchTab('practice');
@@ -2794,6 +3406,9 @@
     });
   }
 
+  entries = loadEntries();
+  markEntriesMutated();
+  syncHeaderHeight();
   render();
   handleLaunchParams();
 })();
