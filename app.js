@@ -53,6 +53,7 @@
   let editingEntryId = null;
   let formType = 'word';
   let isScrubbing = false;
+  let lastScrubbedLetter = null;
   let popupTimer = null;
   let suppressScrollPopup = false;
   let lastScrolledLetter = null;
@@ -73,6 +74,7 @@
 
   // Detail sheet
   const detailBackdrop = document.getElementById('detailBackdrop');
+  const detailSheet = document.getElementById('detailSheet');
   const detailBadge = document.getElementById('detailBadge');
   const detailTerm = document.getElementById('detailTerm');
   const detailEnWrap = document.getElementById('detailEnWrap');
@@ -91,6 +93,7 @@
 
   // Form sheet
   const formBackdrop = document.getElementById('formBackdrop');
+  const formSheet = document.getElementById('formSheet');
   const formTitle = document.getElementById('formTitle');
   const entryForm = document.getElementById('entryForm');
   const typePills = document.querySelectorAll('.type-pill');
@@ -326,6 +329,14 @@
 
   function handleScrub(clientY) {
     const letter = getLetterAtPointer(clientY);
+    if (letter !== lastScrubbedLetter) {
+      lastScrubbedLetter = letter;
+      if (typeof navigator.vibrate === 'function') {
+        try {
+          navigator.vibrate(8);
+        } catch (_) {}
+      }
+    }
     highlightScrubberLetter(letter);
     showLetterPopup(letter);
     scrollToLetter(letter);
@@ -334,6 +345,7 @@
   scrubber.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     isScrubbing = true;
+    lastScrubbedLetter = null;
     scrubber.classList.add('active');
     scrubber.setPointerCapture(e.pointerId);
     handleScrub(e.clientY);
@@ -348,6 +360,7 @@
   function endScrub(e) {
     if (!isScrubbing) return;
     isScrubbing = false;
+    lastScrubbedLetter = null;
     scrubber.classList.remove('active');
     if (scrubber.hasPointerCapture(e.pointerId)) {
       scrubber.releasePointerCapture(e.pointerId);
@@ -460,7 +473,11 @@
       detailExampleWrap.classList.add('hidden');
     }
 
+    detailSheet.style.transform = '';
+    detailSheet.style.transition = '';
+    detailBackdrop.style.background = '';
     detailBackdrop.classList.remove('hidden');
+    updateBodyScrollLock();
     loadAndRenderGrammar(item);
   }
 
@@ -815,9 +832,21 @@
     }
   }
 
+  function updateBodyScrollLock() {
+    const anyOpen =
+      !detailBackdrop.classList.contains('hidden') ||
+      !formBackdrop.classList.contains('hidden');
+    document.documentElement.classList.toggle('sheet-open', anyOpen);
+    document.body.classList.toggle('sheet-open', anyOpen);
+  }
+
   function closeDetail() {
     detailBackdrop.classList.add('hidden');
+    detailSheet.style.transform = '';
+    detailSheet.style.transition = '';
+    detailBackdrop.style.background = '';
     selectedEntryId = null;
+    updateBodyScrollLock();
   }
 
   closeDetailBtn.addEventListener('click', closeDetail);
@@ -887,13 +916,21 @@
       thInput.value = '';
       exampleInput.value = '';
     }
+    formSheet.style.transform = '';
+    formSheet.style.transition = '';
+    formBackdrop.style.background = '';
     formBackdrop.classList.remove('hidden');
+    updateBodyScrollLock();
     setTimeout(() => termInput.focus(), 60);
   }
 
   function closeForm() {
     formBackdrop.classList.add('hidden');
+    formSheet.style.transform = '';
+    formSheet.style.transition = '';
+    formBackdrop.style.background = '';
     editingEntryId = null;
+    updateBodyScrollLock();
   }
 
   addBtn.addEventListener('click', () => openForm(null));
@@ -954,6 +991,94 @@
       else if (!detailBackdrop.classList.contains('hidden')) closeDetail();
     }
   });
+
+  function enableSheetSwipeDismiss(backdrop, sheet, onClose) {
+    let startY = 0;
+    let startTime = 0;
+    let currentY = 0;
+    let tracking = false;
+    let dragging = false;
+
+    // Prevent touchmove on backdrop from scrolling background list
+    backdrop.addEventListener(
+      'touchmove',
+      (e) => {
+        if (e.target === backdrop) e.preventDefault();
+      },
+      { passive: false }
+    );
+
+    sheet.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      const onHandle = Boolean(e.target.closest('.sheet-handle'));
+      const onInteractive = Boolean(e.target.closest('input, textarea, button, select, a'));
+      if (!onHandle && (onInteractive || sheet.scrollTop > 0)) return;
+
+      tracking = true;
+      dragging = false;
+      startY = e.clientY;
+      startTime = Date.now();
+      currentY = 0;
+      if (onHandle) {
+        try {
+          sheet.setPointerCapture(e.pointerId);
+        } catch (_) {}
+      }
+    });
+
+    sheet.addEventListener('pointermove', (e) => {
+      if (!tracking) return;
+      const deltaY = e.clientY - startY;
+      if (!dragging) {
+        if (deltaY <= 6) {
+          if (deltaY < -6 && sheet.scrollTop > 0) tracking = false;
+          return;
+        }
+        if (sheet.scrollTop > 0) {
+          tracking = false;
+          return;
+        }
+        dragging = true;
+        sheet.style.transition = 'none';
+      }
+      currentY = Math.max(0, deltaY);
+      sheet.style.transform = `translateY(${currentY}px)`;
+      const fade = Math.max(0.08, 0.42 * (1 - currentY / 360));
+      backdrop.style.background = `rgba(17, 24, 39, ${fade.toFixed(3)})`;
+    });
+
+    function endDrag(e) {
+      if (!tracking) return;
+      tracking = false;
+      try {
+        if (sheet.hasPointerCapture(e.pointerId)) {
+          sheet.releasePointerCapture(e.pointerId);
+        }
+      } catch (_) {}
+
+      if (!dragging) return;
+      dragging = false;
+
+      const elapsed = Math.max(1, Date.now() - startTime);
+      const velocity = currentY / elapsed;
+      if (currentY > 90 || (velocity > 0.45 && currentY > 30)) {
+        sheet.style.transition = 'transform 0.16s ease-out';
+        sheet.style.transform = 'translateY(100%)';
+        backdrop.style.background = 'rgba(17, 24, 39, 0)';
+        setTimeout(onClose, 150);
+      } else {
+        sheet.style.transition = 'transform 0.18s ease-out';
+        sheet.style.transform = 'translateY(0)';
+        backdrop.style.background = '';
+      }
+    }
+
+    sheet.addEventListener('pointerup', endDrag);
+    sheet.addEventListener('pointercancel', endDrag);
+  }
+
+  enableSheetSwipeDismiss(detailBackdrop, detailSheet, closeDetail);
+  enableSheetSwipeDismiss(formBackdrop, formSheet, closeForm);
 
   async function fetchGoogleDict(text, fromLang, toLang) {
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${fromLang}&tl=${toLang}&dt=t&dt=bd&q=${encodeURIComponent(text)}`;
