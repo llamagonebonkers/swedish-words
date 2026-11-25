@@ -1,9 +1,9 @@
-const CACHE_NAME = 'svenska-ord-v18';
+const CACHE_NAME = 'svenska-ord-v22';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=18',
-  './app.js?v=18',
+  './styles.css?v=22',
+  './app.js?v=22',
   './manifest.webmanifest',
   './icon.svg',
   './icon-192.png',
@@ -26,6 +26,22 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+function fetchWithTimeout(request, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms);
+    fetch(request).then(
+      (res) => {
+        clearTimeout(timer);
+        resolve(res);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
@@ -35,31 +51,38 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Stale-While-Revalidate: instant startup from cache, silent background refresh
+  // HTML navigations: Network-first with fast 1.5s timeout -> instant cache fallback
+  if (request.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html')) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) =>
+        fetchWithTimeout(request, 1500)
+          .then((response) => {
+            if (response && response.status === 200) {
+              cache.put('./index.html', response.clone());
+            }
+            return response;
+          })
+          .catch(() =>
+            cache.match(request).then((cached) => cached || cache.match('./index.html'))
+          )
+      )
+    );
+    return;
+  }
+
+  // Versioned static assets (?v=19, icons, manifest): Cache-first for 0ms startup
   event.respondWith(
     caches.open(CACHE_NAME).then((cache) =>
       cache.match(request).then((cached) => {
-        const networkPromise = fetch(request)
+        if (cached) return cached;
+        return fetch(request)
           .then((response) => {
             if (response && response.status === 200) {
               cache.put(request, response.clone());
             }
             return response;
           })
-          .catch(() => null);
-
-        if (cached) {
-          event.waitUntil(networkPromise);
-          return cached;
-        }
-
-        return networkPromise.then((networkResponse) => {
-          if (networkResponse) return networkResponse;
-          if (request.mode === 'navigate') {
-            return cache.match('./index.html');
-          }
-          return new Response('', { status: 503, statusText: 'Offline' });
-        });
+          .catch(() => new Response('', { status: 503, statusText: 'Offline' }));
       })
     )
   );

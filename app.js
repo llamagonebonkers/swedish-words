@@ -13,39 +13,39 @@
   const SR_INTERVALS_DAYS = [1, 3, 7, 14, 30];
 
   const SAMPLE_ENTRIES = [
-    { id: 'w1', type: 'word', term: 'anledning', en: 'Reason, cause', th: 'เหตุผล, สาเหตุ', example: 'Det finns ingen anledning att stressa.' },
-    { id: 'w2', type: 'word', term: 'besvikelse', en: 'Disappointment', th: 'ความผิดหวัง', example: 'Det var en stor besvikelse.' },
-    { id: 'w3', type: 'word', term: 'duktig', en: 'Good at, skilled, clever', th: 'เก่ง, ขยัน', example: 'Hon är väldigt duktig på att laga mat.' },
-    { id: 'w4', type: 'word', term: 'egentligen', en: 'Actually, really', th: 'จริงๆ แล้ว, ที่จริง', example: 'Egentligen borde jag sova nu.' },
-    { id: 'w5', type: 'word', term: 'fika', en: 'Coffee & pastry break with friends', th: 'พักดื่มกาแฟและกินขนม', example: 'Ska vi ta en fika efter jobbet?' },
-    { id: 'w6', type: 'word', term: 'ganska', en: 'Quite, fairly, rather', th: 'ค่อนข้าง', example: 'Det är ganska kallt ute idag.' },
-    { id: 'w7', type: 'word', term: 'hinna', en: 'To have time / make it in time', th: 'ทันเวลา, มีเวลาพอ', example: 'Jag tror inte att jag hinner med bussen.' },
-    { id: 'w8', type: 'word', term: 'jättebra', en: 'Great, very good', th: 'ดีมาก, เยี่ยมมาก', example: 'Det låter som en jättebra idé!' },
-    { id: 'w9', type: 'word', term: 'kanske', en: 'Maybe, perhaps', th: 'อาจจะ, บางที', example: 'Vi kanske ses imorgon.' },
-    { id: 'w10', type: 'word', term: 'lagom', en: 'Just right, not too much or too little', th: 'พอดี, ไม่มากไม่น้อยเกินไป', example: 'Vattnet är lagom varmt.' },
-    { id: 'w11', type: 'word', term: 'mysig', en: 'Cozy, pleasant, warm', th: 'อบอุ่น, น่ารัก, สบายๆ', example: 'Vi hade en mysig kväll i soffan.' },
-    { id: 'w12', type: 'word', term: 'orka', en: 'To have the energy / strength to do something', th: 'มีแรง, ไหว', example: 'Jag orkar inte träna idag.' },
-    { id: 'w13', type: 'word', term: 'precis', en: 'Exactly, just now', th: 'พอดีเป๊ะ, เพิ่งจะ', example: 'Jag kom precis hem.' },
-    { id: 'w14', type: 'word', term: 'rolig', en: 'Fun, funny', th: 'สนุก, ตลก', example: 'Filmen var väldigt rolig.' },
-    { id: 'w15', type: 'word', term: 'självklart', en: 'Of course, obviously', th: 'แน่นอน', example: 'Självklart kan jag hjälpa dig!' },
-    { id: 'w16', type: 'word', term: 'trevlig', en: 'Nice, friendly, pleasant', th: 'ใจดี, น่ารัก, น่าคบ', example: 'Ha en trevlig helg!' },
-    { id: 'w17', type: 'word', term: 'ungefär', en: 'Approximately, about', th: 'ประมาณ, ราวๆ', example: 'Det tar ungefär tio minuter.' },
-    { id: 'w18', type: 'word', term: 'verkligen', en: 'Really, truly', th: 'จริงๆ, อย่างแท้จริง', example: 'Tack så mycket, verkligen!' },
-    { id: 'w19', type: 'word', term: 'återkomma', en: 'To get back to someone, return', th: 'ติดต่อกลับ, กลับมา', example: 'Jag återkommer imorgon.' },
-    { id: 'w20', type: 'word', term: 'äntligen', en: 'Finally, at last', th: 'ในที่สุด, สักที', example: 'Äntligen är det fredag!' },
-    { id: 'w21', type: 'word', term: 'överens', en: 'In agreement, agreed', th: 'เห็นตรงกัน, ตกลงกัน', example: 'Vi är överens om planen.' },
+    { id: 'w1', type: 'word', term: 'anledning', en: 'Reason, cause', th: 'เหตุผล, สาเหตุ', example: 'Det finns ingen anledning att stressa.', exampleEn: 'There is no reason to stress.' },
+    { id: 'w2', type: 'word', term: 'besvikelse', en: 'Disappointment', th: 'ความผิดหวัง', example: 'Det var en stor besvikelse.', exampleEn: 'It was a big disappointment.' },
+    { id: 'w3', type: 'word', term: 'duktig', en: 'Good at, skilled, clever', th: 'เก่ง, ขยัน', example: 'Hon är väldigt duktig på att laga mat.', exampleEn: 'She is very good at cooking.' },
+    { id: 'w4', type: 'word', term: 'egentligen', en: 'Actually, really', th: 'จริงๆ แล้ว, ที่จริง', example: 'Egentligen borde jag sova nu.', exampleEn: 'Actually, I should sleep now.' },
+    { id: 'w5', type: 'word', term: 'fika', en: 'Coffee & pastry break with friends', th: 'พักดื่มกาแฟและกินขนม', example: 'Ska vi ta en fika efter jobbet?', exampleEn: 'Shall we have a fika after work?' },
+    { id: 'w6', type: 'word', term: 'ganska', en: 'Quite, fairly, rather', th: 'ค่อนข้าง', example: 'Det är ganska kallt ute idag.', exampleEn: 'It is quite cold outside today.' },
+    { id: 'w7', type: 'word', term: 'hinna', en: 'To have time / make it in time', th: 'ทันเวลา, มีเวลาพอ', example: 'Jag tror inte att jag hinner med bussen.', exampleEn: 'I don’t think I’ll catch the bus.' },
+    { id: 'w8', type: 'word', term: 'jättebra', en: 'Great, very good', th: 'ดีมาก, เยี่ยมมาก', example: 'Det låter som en jättebra idé!', exampleEn: 'That sounds like a great idea!' },
+    { id: 'w9', type: 'word', term: 'kanske', en: 'Maybe, perhaps', th: 'อาจจะ, บางที', example: 'Vi kanske ses imorgon.', exampleEn: 'Maybe we’ll see each other tomorrow.' },
+    { id: 'w10', type: 'word', term: 'lagom', en: 'Just right, not too much or too little', th: 'พอดี, ไม่มากไม่น้อยเกินไป', example: 'Vattnet är lagom varmt.', exampleEn: 'The water is just the right temperature.' },
+    { id: 'w11', type: 'word', term: 'mysig', en: 'Cozy, pleasant, warm', th: 'อบอุ่น, น่ารัก, สบายๆ', example: 'Vi hade en mysig kväll i soffan.', exampleEn: 'We had a cozy evening on the sofa.' },
+    { id: 'w12', type: 'word', term: 'orka', en: 'To have the energy / strength to do something', th: 'มีแรง, ไหว', example: 'Jag orkar inte träna idag.', exampleEn: 'I don’t have the energy to work out today.' },
+    { id: 'w13', type: 'word', term: 'precis', en: 'Exactly, just now', th: 'พอดีเป๊ะ, เพิ่งจะ', example: 'Jag kom precis hem.', exampleEn: 'I just got home.' },
+    { id: 'w14', type: 'word', term: 'rolig', en: 'Fun, funny', th: 'สนุก, ตลก', example: 'Filmen var väldigt rolig.', exampleEn: 'The movie was very funny.' },
+    { id: 'w15', type: 'word', term: 'självklart', en: 'Of course, obviously', th: 'แน่นอน', example: 'Självklart kan jag hjälpa dig!', exampleEn: 'Of course I can help you!' },
+    { id: 'w16', type: 'word', term: 'trevlig', en: 'Nice, friendly, pleasant', th: 'ใจดี, น่ารัก, น่าคบ', example: 'Ha en trevlig helg!', exampleEn: 'Have a nice weekend!' },
+    { id: 'w17', type: 'word', term: 'ungefär', en: 'Approximately, about', th: 'ประมาณ, ราวๆ', example: 'Det tar ungefär tio minuter.', exampleEn: 'It takes about ten minutes.' },
+    { id: 'w18', type: 'word', term: 'verkligen', en: 'Really, truly', th: 'จริงๆ, อย่างแท้จริง', example: 'Tack så mycket, verkligen!', exampleEn: 'Thank you very much, really!' },
+    { id: 'w19', type: 'word', term: 'återkomma', en: 'To get back to someone, return', th: 'ติดต่อกลับ, กลับมา', example: 'Jag återkommer imorgon.', exampleEn: 'I’ll get back to you tomorrow.' },
+    { id: 'w20', type: 'word', term: 'äntligen', en: 'Finally, at last', th: 'ในที่สุด, สักที', example: 'Äntligen är det fredag!', exampleEn: 'Finally it’s Friday!' },
+    { id: 'w21', type: 'word', term: 'överens', en: 'In agreement, agreed', th: 'เห็นตรงกัน, ตกลงกัน', example: 'Vi är överens om planen.', exampleEn: 'We agree on the plan.' },
 
-    { id: 'p1', type: 'phrase', term: 'Det gör inget', en: 'No problem / It doesn’t matter', th: 'ไม่เป็นไร', example: 'Ursäkta att jag är sen! – Det gör inget.' },
-    { id: 'p2', type: 'phrase', term: 'Ha det så bra', en: 'Take care / Have a great time', th: 'ดูแลตัวเองนะ / ขอให้โชคดี', example: 'Vi ses nästa vecka, ha det så bra!' },
-    { id: 'p3', type: 'phrase', term: 'Hur är läget?', en: 'How’s it going? / What’s up?', th: 'เป็นไงบ้าง?', example: 'Tjena! Hur är läget?' },
-    { id: 'p4', type: 'phrase', term: 'Ingen orsak', en: 'You’re welcome / No problem', th: 'ไม่เป็นไร / ด้วยความยินดี', example: 'Tack för hjälpen! – Ingen orsak.' },
-    { id: 'p5', type: 'phrase', term: 'Jag hänger med', en: 'I understand / I’ll come along', th: 'ฉันเข้าใจ / ฉันไปด้วย', example: 'Ska vi gå? – Ja, jag hänger med.' },
-    { id: 'p6', type: 'phrase', term: 'Komma överens', en: 'To get along / reach an agreement', th: 'เข้ากันได้ / ตกลงกันได้', example: 'De kommer väldigt bra överens.' },
-    { id: 'p7', type: 'phrase', term: 'Lägga av', en: 'Stop it / Quit it (casual)', th: 'หยุดนะ / เลิกทำได้แล้ว', example: 'Lägg av, du skojar!' },
-    { id: 'p8', type: 'phrase', term: 'Passa på', en: 'Take the opportunity', th: 'ถือโอกาส, คว้าโอกาส', example: 'Passa på att gå ut medan solen skiner.' },
-    { id: 'p9', type: 'phrase', term: 'Ta det lugnt', en: 'Take it easy / Relax', th: 'ใจเย็นๆ / พักผ่อนสบายๆ', example: 'Ta det lugnt, vi har gott om tid.' },
-    { id: 'p10', type: 'phrase', term: 'Vad synd!', en: 'What a pity! / Too bad!', th: 'น่าเสียดายจัง!', example: 'Kan du inte komma ikväll? Vad synd!' },
-    { id: 'p11', type: 'phrase', term: 'Är du med?', en: 'Are you following? / Do you get it?', th: 'เข้าใจไหม? / ทันไหม?', example: 'Först klickar vi här, är du med?' }
+    { id: 'p1', type: 'phrase', term: 'Det gör inget', en: 'No problem / It doesn’t matter', th: 'ไม่เป็นไร', example: 'Ursäkta att jag är sen! – Det gör inget.', exampleEn: 'Sorry I’m late! – No problem.' },
+    { id: 'p2', type: 'phrase', term: 'Ha det så bra', en: 'Take care / Have a great time', th: 'ดูแลตัวเองนะ / ขอให้โชคดี', example: 'Vi ses nästa vecka, ha det så bra!', exampleEn: 'See you next week, take care!' },
+    { id: 'p3', type: 'phrase', term: 'Hur är läget?', en: 'How’s it going? / What’s up?', th: 'เป็นไงบ้าง?', example: 'Tjena! Hur är läget?', exampleEn: 'Hey! How’s it going?' },
+    { id: 'p4', type: 'phrase', term: 'Ingen orsak', en: 'You’re welcome / No problem', th: 'ไม่เป็นไร / ด้วยความยินดี', example: 'Tack för hjälpen! – Ingen orsak.', exampleEn: 'Thanks for the help! – You’re welcome.' },
+    { id: 'p5', type: 'phrase', term: 'Jag hänger med', en: 'I understand / I’ll come along', th: 'ฉันเข้าใจ / ฉันไปด้วย', example: 'Ska vi gå? – Ja, jag hänger med.', exampleEn: 'Shall we go? – Yes, I’ll come along.' },
+    { id: 'p6', type: 'phrase', term: 'Komma överens', en: 'To get along / reach an agreement', th: 'เข้ากันได้ / ตกลงกันได้', example: 'De kommer väldigt bra överens.', exampleEn: 'They get along very well.' },
+    { id: 'p7', type: 'phrase', term: 'Lägga av', en: 'Stop it / Quit it (casual)', th: 'หยุดนะ / เลิกทำได้แล้ว', example: 'Lägg av, du skojar!', exampleEn: 'Stop it, you’re kidding!' },
+    { id: 'p8', type: 'phrase', term: 'Passa på', en: 'Take the opportunity', th: 'ถือโอกาส, คว้าโอกาส', example: 'Passa på att gå ut medan solen skiner.', exampleEn: 'Take the opportunity to go out while the sun shines.' },
+    { id: 'p9', type: 'phrase', term: 'Ta det lugnt', en: 'Take it easy / Relax', th: 'ใจเย็นๆ / พักผ่อนสบายๆ', example: 'Ta det lugnt, vi har gott om tid.', exampleEn: 'Take it easy, we have plenty of time.' },
+    { id: 'p10', type: 'phrase', term: 'Vad synd!', en: 'What a pity! / Too bad!', th: 'น่าเสียดายจัง!', example: 'Kan du inte komma ikväll? Vad synd!', exampleEn: 'Can’t you come tonight? Too bad!' },
+    { id: 'p11', type: 'phrase', term: 'Är du med?', en: 'Are you following? / Do you get it?', th: 'เข้าใจไหม? / ทันไหม?', example: 'Först klickar vi här, är du med?', exampleEn: 'First we click here, are you following?' }
   ];
   const SAMPLE_ID_SET = new Set(SAMPLE_ENTRIES.map((e) => e.id));
 
@@ -71,8 +71,10 @@
   let translateAbortController = null;
   let translateReqId = 0;
   let grammarAbortController = null;
+  let exampleAbortController = null;
   let duplicateEntryRef = null;
   let suggestedBaseForm = '';
+  let pendingExampleEn = '';
 
   // Practice State
   let practiceFilter = 'all'; // 'all' | 'word' | 'phrase'
@@ -122,6 +124,7 @@
   const cardThWrap = document.getElementById('cardThWrap');
   const cardTh = document.getElementById('cardTh');
   const cardExample = document.getElementById('cardExample');
+  const cardExampleEn = document.getElementById('cardExampleEn');
   const practiceRevealWrap = document.getElementById('practiceRevealWrap');
   const revealAnswerBtn = document.getElementById('revealAnswerBtn');
   const practiceRateWrap = document.getElementById('practiceRateWrap');
@@ -145,6 +148,7 @@
   const detailTh = document.getElementById('detailTh');
   const detailExampleWrap = document.getElementById('detailExampleWrap');
   const detailExample = document.getElementById('detailExample');
+  const detailExampleEn = document.getElementById('detailExampleEn');
   const speakExampleBtn = document.getElementById('speakExampleBtn');
   const detailGrammarWrap = document.getElementById('detailGrammarWrap');
   const detailGrammarTitle = document.getElementById('detailGrammarTitle');
@@ -199,7 +203,18 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          const sampleMap = new Map(SAMPLE_ENTRIES.map((s) => [s.id, s]));
+          return parsed.map((item) => {
+            if (item && item.example && !item.exampleEn) {
+              const sample = sampleMap.get(item.id);
+              if (sample && sample.example === item.example && sample.exampleEn) {
+                return { ...item, exampleEn: sample.exampleEn };
+              }
+            }
+            return item;
+          });
+        }
       }
     } catch (_) {
       // Ignore storage errors
@@ -439,7 +454,7 @@
         addQBtn.textContent = `Add "${rawQ}"`;
         addQBtn.addEventListener('click', () => {
           const suggestedType = rawQ.split(/\s+/).length >= 3 ? 'phrase' : activeTab;
-          openForm(null, { prefillTerm: rawQ, prefillType: suggestedType });
+          openForm(null, { prefillTerm: rawQ, prefillType: suggestedType, autoSuggest: true });
         });
         emptyActions.appendChild(addQBtn);
 
@@ -715,15 +730,44 @@
     { passive: true }
   );
 
-  // Live Search
+  // Live Search & Smart Enter
   searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value;
     clearSearchBtn.classList.toggle('hidden', searchQuery.length === 0);
     if (activeTab === 'practice' && searchQuery.trim()) {
-      switchTab('word');
+      const counts = updateCounts();
+      const targetTab = counts.words === 0 && counts.phrases > 0 ? 'phrase' : 'word';
+      switchTab(targetTab);
       return;
     }
     render();
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const rawQ = searchInput.value.trim();
+    if (!rawQ) return;
+    e.preventDefault();
+
+    const searchTab = activeTab === 'practice' ? 'word' : activeTab;
+    const filtered = getFilteredEntries(searchTab);
+    if (filtered.length === 1) {
+      searchInput.blur();
+      openDetail(filtered[0].id);
+      return;
+    }
+    if (filtered.length === 0) {
+      const otherTab = searchTab === 'word' ? 'phrase' : 'word';
+      const otherFiltered = getFilteredEntries(otherTab);
+      if (otherFiltered.length === 1) {
+        searchInput.blur();
+        switchTab(otherTab);
+        openDetail(otherFiltered[0].id);
+      } else if (otherFiltered.length === 0) {
+        const suggestedType = rawQ.split(/\s+/).length >= 3 ? 'phrase' : searchTab;
+        openForm(null, { prefillTerm: rawQ, prefillType: suggestedType, autoSuggest: true });
+      }
+    }
   });
 
   clearSearchBtn.addEventListener('click', () => {
@@ -815,8 +859,15 @@
     if (currentItem.example && currentItem.example.trim()) {
       cardExample.textContent = `"${currentItem.example}"`;
       cardExample.classList.remove('hidden');
+      if (currentItem.exampleEn && currentItem.exampleEn.trim()) {
+        cardExampleEn.textContent = currentItem.exampleEn;
+        cardExampleEn.classList.remove('hidden');
+      } else {
+        cardExampleEn.classList.add('hidden');
+      }
     } else {
       cardExample.classList.add('hidden');
+      cardExampleEn.classList.add('hidden');
     }
 
     cardAnswer.classList.toggle('hidden', !practiceRevealed);
@@ -829,6 +880,10 @@
     if (practiceRevealed || practiceQueue.length === 0) return;
     practiceRevealed = true;
     renderPracticeView();
+    const currentItem = entries.find((e) => e.id === practiceQueue[0]);
+    if (currentItem && currentItem.example && !currentItem.exampleEn) {
+      loadExampleTranslation(currentItem);
+    }
   }
 
   function ratePracticeCard(knewIt) {
@@ -1121,8 +1176,18 @@
 
     if (item.example && item.example.trim()) {
       detailExample.textContent = item.example;
+      if (item.exampleEn && item.exampleEn.trim()) {
+        detailExampleEn.textContent = item.exampleEn;
+        detailExampleEn.classList.remove('hidden');
+      } else {
+        detailExampleEn.textContent = '';
+        detailExampleEn.classList.add('hidden');
+        loadExampleTranslation(item);
+      }
       detailExampleWrap.classList.remove('hidden');
     } else {
+      detailExampleEn.textContent = '';
+      detailExampleEn.classList.add('hidden');
       detailExampleWrap.classList.add('hidden');
     }
 
@@ -1134,6 +1199,50 @@
     pushModalHistory();
     detailSheet.focus({ preventScroll: true });
     loadAndRenderGrammar(item);
+  }
+
+  async function loadExampleTranslation(item) {
+    if (exampleAbortController) {
+      exampleAbortController.abort();
+      exampleAbortController = null;
+    }
+    const ex = (item.example || '').trim();
+    if (!ex || item.exampleEn) return;
+
+    // Instant offline backfill if this matches a built-in sample entry
+    const sampleMatch = SAMPLE_ENTRIES.find((s) => s.id === item.id && s.example === ex && s.exampleEn);
+    if (sampleMatch) {
+      item.exampleEn = sampleMatch.exampleEn;
+      saveEntries();
+      if (selectedEntryId === item.id) {
+        detailExampleEn.textContent = sampleMatch.exampleEn;
+        detailExampleEn.classList.remove('hidden');
+      }
+      return;
+    }
+
+    if (!navigator.onLine) return;
+    const controller = new AbortController();
+    exampleAbortController = controller;
+    try {
+      const res = await translateWithDict(ex, 'sv', 'en', controller.signal);
+      if (controller.signal.aborted) return;
+      if (res.primary) {
+        item.exampleEn = res.primary;
+        saveEntries();
+        if (selectedEntryId === item.id) {
+          detailExampleEn.textContent = res.primary;
+          detailExampleEn.classList.remove('hidden');
+        }
+        if (activeTab === 'practice' && practiceRevealed && practiceQueue[0] === item.id) {
+          cardExampleEn.textContent = res.primary;
+          cardExampleEn.classList.remove('hidden');
+        }
+      }
+    } catch (_) {
+    } finally {
+      if (exampleAbortController === controller) exampleAbortController = null;
+    }
   }
 
   const GRAMMAR_LABELS_EN = {
@@ -1615,6 +1724,10 @@
       grammarAbortController.abort();
       grammarAbortController = null;
     }
+    if (exampleAbortController) {
+      exampleAbortController.abort();
+      exampleAbortController = null;
+    }
     detailBackdrop.classList.add('hidden');
     detailSheet.style.transform = '';
     detailSheet.style.transition = '';
@@ -1717,6 +1830,7 @@
     exampleSuggestions.classList.add('hidden');
     baseFormNotice.classList.add('hidden');
     suggestedBaseForm = '';
+    pendingExampleEn = '';
   }
 
   function openForm(existingItem = null, { prefillTerm = '', prefillType = null, autoSuggest = false } = {}) {
@@ -1741,6 +1855,7 @@
       enInput.value = existingItem.en || '';
       thInput.value = existingItem.th || '';
       exampleInput.value = existingItem.example || '';
+      pendingExampleEn = existingItem.exampleEn || '';
     } else {
       editingEntryId = null;
       const defaultType = prefillType || (activeTab === 'phrase' ? 'phrase' : 'word');
@@ -1790,13 +1905,85 @@
     if (e.target === formBackdrop) closeForm();
   });
 
-  // Enter in termInput runs Suggest when translations are still empty
-  termInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && termInput.value.trim() && !enInput.value.trim() && !thInput.value.trim()) {
-      e.preventDefault();
-      suggestBtn.click();
-    }
+  // Enter in termInput runs Suggest when translations are empty;
+  // Enter in enInput / thInput runs reverse Suggest when termInput is empty.
+  let suppressSubmitUntil = 0;
+  const saveFormBtn = document.getElementById('saveFormBtn');
+  saveFormBtn.addEventListener('click', () => {
+    suppressSubmitUntil = 0;
   });
+
+  function handleFieldEnter(e) {
+    if (e.key !== 'Enter' && e.keyCode !== 13) return;
+    const hasTerm = Boolean(termInput.value.trim());
+    const hasTranslation = Boolean(enInput.value.trim() || thInput.value.trim());
+    if (!hasTerm || !hasTranslation) {
+      e.preventDefault();
+      e.stopPropagation();
+      suppressSubmitUntil = Date.now() + 300;
+      if (e.type === 'keydown' && !suggestBtn.disabled && (hasTerm || hasTranslation)) {
+        suggestBtn.click();
+      }
+    }
+  }
+  [termInput, enInput, thInput].forEach((inputEl) => {
+    inputEl.addEventListener('keydown', handleFieldEnter);
+    inputEl.addEventListener('keypress', handleFieldEnter);
+    inputEl.addEventListener('input', () => formError.classList.add('hidden'));
+  });
+
+  exampleInput.addEventListener('input', () => {
+    pendingExampleEn = '';
+    exampleSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
+  });
+
+  async function enrichEntryInBackground(entry) {
+    if (!entry || !navigator.onLine) return;
+    let changed = false;
+    const tasks = [];
+
+    const baseTerm = stripLeadingArticle(entry.term);
+    if (entry.type === 'word' && baseTerm && !baseTerm.includes(' ') && (!entry.grammar || entry.grammar.v < 3)) {
+      tasks.push(
+        fetchWiktionaryGrammar(entry.term)
+          .then((grammar) => {
+            if (grammar) {
+              entry.grammar = grammar;
+              changed = true;
+            }
+          })
+          .catch(() => {})
+      );
+    }
+
+    if (entry.example && !entry.exampleEn) {
+      tasks.push(
+        translateWithDict(entry.example, 'sv', 'en')
+          .then((res) => {
+            if (res?.primary) {
+              entry.exampleEn = res.primary;
+              changed = true;
+            }
+          })
+          .catch(() => {})
+      );
+    }
+
+    if (tasks.length === 0) return;
+    await Promise.allSettled(tasks);
+    if (changed) {
+      saveEntries();
+      if (selectedEntryId === entry.id) {
+        renderTermWithArticle(detailTerm, entry);
+        if (entry.exampleEn) {
+          detailExampleEn.textContent = entry.exampleEn;
+          detailExampleEn.classList.remove('hidden');
+        }
+        if (entry.grammar) renderGrammarData(entry.grammar);
+      }
+      render();
+    }
+  }
 
   termInput.addEventListener('input', () => {
     svSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
@@ -1809,6 +1996,7 @@
 
   entryForm.addEventListener('submit', (e) => {
     e.preventDefault();
+    if (Date.now() < suppressSubmitUntil) return;
     const term = termInput.value.trim();
     const en = enInput.value.trim();
     const th = thInput.value.trim();
@@ -1819,26 +2007,47 @@
       return;
     }
 
+    const isNewEntry = !editingEntryId;
+    let savedEntry = null;
+
     if (editingEntryId) {
       entries = entries.map((item) => {
         if (item.id !== editingEntryId) return item;
         const termChanged = item.term.trim().toLowerCase() !== term.toLowerCase();
-        return {
+        const exampleChanged = (item.example || '').trim() !== example;
+        savedEntry = {
           ...item,
           type: formType,
           term,
           en,
           th,
           example,
+          exampleEn: example ? (exampleChanged ? pendingExampleEn : item.exampleEn || pendingExampleEn) : '',
           grammar: termChanged ? undefined : item.grammar
         };
+        return savedEntry;
       });
     } else {
       const id = 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      entries.push({ id, type: formType, term, en, th, example });
+      savedEntry = {
+        id,
+        type: formType,
+        term,
+        en,
+        th,
+        example,
+        exampleEn: example ? pendingExampleEn : ''
+      };
+      entries.push(savedEntry);
     }
 
     saveEntries();
+
+    if (isNewEntry && searchQuery.trim()) {
+      searchInput.value = '';
+      searchQuery = '';
+      clearSearchBtn.classList.add('hidden');
+    }
 
     if (activeTab !== formType) {
       activeTab = formType;
@@ -1851,6 +2060,9 @@
 
     closeForm();
     render();
+    if (savedEntry) {
+      enrichEntryInBackground(savedEntry);
+    }
   });
 
   // Settings & Backup Sheet
@@ -1903,7 +2115,7 @@
     updateSettingsUI();
   });
 
-  exportBtn.addEventListener('click', () => {
+  exportBtn.addEventListener('click', async () => {
     const payload = {
       app: 'Swedish Words',
       version: 1,
@@ -1911,10 +2123,28 @@
       entries
     };
     const json = JSON.stringify(payload, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
     const dateStr = new Date().toISOString().slice(0, 10);
     const filename = `swedish-words-backup-${dateStr}.json`;
 
+    try {
+      const file = new File([json], filename, { type: 'application/json' });
+      if (
+        typeof navigator.share === 'function' &&
+        typeof navigator.canShare === 'function' &&
+        navigator.canShare({ files: [file] })
+      ) {
+        await navigator.share({
+          title: 'Swedish Words Backup',
+          files: [file]
+        });
+        showToast(`Shared backup (${entries.length} items)`);
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+    }
+
+    const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1960,6 +2190,7 @@
           en,
           th,
           example: typeof raw.example === 'string' ? raw.example.trim() : '',
+          exampleEn: typeof raw.exampleEn === 'string' ? raw.exampleEn.trim() : '',
           grammar: raw.grammar || undefined,
           sr: raw.sr || undefined
         });
@@ -2295,9 +2526,10 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'en-chip example-chip';
-      btn.textContent = `Use: "${ex.sv}"`;
+      btn.textContent = ex.en ? `Use: "${ex.sv}" (${ex.en})` : `Use: "${ex.sv}"`;
       btn.addEventListener('click', () => {
         exampleInput.value = ex.sv;
+        pendingExampleEn = ex.en || '';
         exampleSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
         btn.classList.add('active');
       });
@@ -2439,6 +2671,7 @@
     }
 
     const req = startTranslateRequest();
+    formError.classList.add('hidden');
     suggestBtn.disabled = true;
     suggestBtn.textContent = 'Searching...';
     clearFormSuggestions();
@@ -2514,21 +2747,32 @@
     }
   });
 
-  // Android PWA Share Target handler (?share_text=... or ?share_title=...)
-  function handleIncomingShare() {
+  // Android PWA Share Target & Shortcut launch params handler
+  function handleLaunchParams() {
     try {
       const params = new URLSearchParams(window.location.search);
       const raw = (params.get('share_text') || params.get('share_title') || '').trim();
-      if (!raw) return;
-      const cleaned = raw.replace(/https?:\/\/\S+/gi, '').trim();
-      history.replaceState(null, '', window.location.pathname);
-      if (!cleaned) return;
-      const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
-      openForm(null, {
-        prefillTerm: cleaned,
-        prefillType: wordCount >= 3 ? 'phrase' : 'word',
-        autoSuggest: true
-      });
+      if (raw) {
+        const cleaned = raw.replace(/https?:\/\/\S+/gi, '').trim();
+        history.replaceState(null, '', window.location.pathname);
+        if (!cleaned) return;
+        const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
+        openForm(null, {
+          prefillTerm: cleaned,
+          prefillType: wordCount >= 3 ? 'phrase' : 'word',
+          autoSuggest: true
+        });
+        return;
+      }
+
+      const action = params.get('action');
+      if (action === 'add') {
+        history.replaceState(null, '', window.location.pathname);
+        openForm(null);
+      } else if (action === 'practice') {
+        history.replaceState(null, '', window.location.pathname);
+        switchTab('practice');
+      }
     } catch (_) {}
   }
 
@@ -2551,5 +2795,5 @@
   }
 
   render();
-  handleIncomingShare();
+  handleLaunchParams();
 })();
