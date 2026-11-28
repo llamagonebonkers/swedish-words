@@ -3,7 +3,7 @@
 
   const STORAGE_KEY = 'svenska_ord_entries_v2';
   const HIDE_HINTS_KEY = 'svenska_ord_hide_hints_v1';
-  const GRAMMAR_SCHEMA_VERSION = 4;
+  const GRAMMAR_SCHEMA_VERSION = 5;
   const SWEDISH_ALPHABET = [
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
     'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
@@ -94,6 +94,11 @@
   let duplicateEntryRef = null;
   let suggestedBaseForm = '';
   let pendingExampleEn = '';
+  let formWiktSenses = [];
+  let formWiktTerm = '';
+  let selectedFormPos = '';
+  let enSyncDebounceTimer = null;
+  let exampleChipTranslateController = null;
 
   // In-memory search & sort index (never persisted to localStorage)
   const entryIndexCache = new WeakMap();
@@ -180,6 +185,7 @@
   const detailGrammarWrap = document.getElementById('detailGrammarWrap');
   const detailGrammarTitle = document.getElementById('detailGrammarTitle');
   const detailPos = document.getElementById('detailPos');
+  const detailPosSwitch = document.getElementById('detailPosSwitch');
   const detailGrammarStatus = document.getElementById('detailGrammarStatus');
   const detailForms = document.getElementById('detailForms');
   const editEntryBtn = document.getElementById('editEntryBtn');
@@ -233,6 +239,26 @@
     return 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
 
+  function sanitizeGrammarForms(rawForms) {
+    if (!Array.isArray(rawForms)) return [];
+    return rawForms
+      .filter((f) => f && typeof f.label === 'string' && typeof f.value === 'string')
+      .map((f) => ({ label: f.label, value: f.value }));
+  }
+
+  function sanitizeAltSenses(rawAlt) {
+    if (!Array.isArray(rawAlt)) return [];
+    return rawAlt
+      .filter((s) => s && typeof s.pos === 'string' && s.pos.trim())
+      .slice(0, 4)
+      .map((s) => ({
+        pos: s.pos.trim(),
+        ...(typeof s.hint === 'string' && s.hint.trim() ? { hint: s.hint.trim().slice(0, 80) } : {}),
+        forms: sanitizeGrammarForms(s.forms),
+        ...(typeof s.baseForm === 'string' && s.baseForm.trim() ? { baseForm: s.baseForm.trim() } : {})
+      }));
+  }
+
   function sanitizeEntry(raw, usedIds) {
     if (!raw || typeof raw !== 'object' || typeof raw.term !== 'string') return null;
     const term = raw.term.trim();
@@ -261,19 +287,18 @@
     if (example && exampleEn) clean.exampleEn = exampleEn;
 
     if (raw.grammar && typeof raw.grammar === 'object') {
-      const forms = Array.isArray(raw.grammar.forms)
-        ? raw.grammar.forms
-            .filter((f) => f && typeof f.label === 'string' && typeof f.value === 'string')
-            .map((f) => ({ label: f.label, value: f.value }))
-        : [];
+      const forms = sanitizeGrammarForms(raw.grammar.forms);
       const pos = typeof raw.grammar.pos === 'string' ? raw.grammar.pos : '';
       const baseForm = typeof raw.grammar.baseForm === 'string' ? raw.grammar.baseForm : '';
+      const altSenses = sanitizeAltSenses(raw.grammar.altSenses);
       if (pos || forms.length > 0) {
         clean.grammar = {
           v: Number(raw.grammar.v) || 1,
           pos,
           forms,
-          ...(baseForm ? { baseForm } : {})
+          ...(baseForm ? { baseForm } : {}),
+          ...(altSenses.length > 1 ? { altSenses } : {}),
+          ...(raw.grammar.userLockedPos ? { userLockedPos: true } : {})
         };
       }
     }
@@ -305,11 +330,14 @@
     if (item.example) out.example = item.example;
     if (item.example && item.exampleEn) out.exampleEn = item.exampleEn;
     if (item.grammar) {
+      const altSenses = sanitizeAltSenses(item.grammar.altSenses);
       out.grammar = {
         v: item.grammar.v,
         pos: item.grammar.pos || '',
         forms: item.grammar.forms || [],
-        ...(item.grammar.baseForm ? { baseForm: item.grammar.baseForm } : {})
+        ...(item.grammar.baseForm ? { baseForm: item.grammar.baseForm } : {}),
+        ...(altSenses.length > 1 ? { altSenses } : {}),
+        ...(item.grammar.userLockedPos ? { userLockedPos: true } : {})
       };
     }
     if (item.sr) out.sr = item.sr;
@@ -1701,9 +1729,79 @@
     return svg;
   }
 
+  const EN_STOPWORDS = new Set([
+    'a', 'an', 'the', 'to', 'of', 'in', 'on', 'at', 'for', 'by', 'with', 'from',
+    'as', 'be', 'is', 'are', 'was', 'were', 'it', 'its', 'or', 'and', 'not',
+    'someone', 'something', 'oneself', 'one', 'very', 'that', 'this'
+  ]);
+  const EN_MODAL_OR_AUX_VERBS = new Set([
+    'may', 'might', 'can', 'could', 'must', 'shall', 'should', 'will', 'would',
+    'get', 'gets', 'got', 'receive', 'receives', 'allowed', 'permitted'
+  ]);
+
+  function normalizePosCategory(rawPos) {
+    const p = (rawPos || '').trim().toLowerCase();
+    if (!p) return '';
+    if (p.startsWith('adv') || p.includes('adverb')) return 'Adverb';
+    if (p.startsWith('adj') || p.includes('adjektiv')) return 'Adjective';
+    if (p.startsWith('noun') || p.includes('substantiv') || p === 'proper noun') return 'Noun';
+    if (p === 'verb' || p === 'auxiliary verb' || p.startsWith('verb')) return 'Verb';
+    if (p.startsWith('pron') || p.includes('pronomen') || p === 'determiner') return 'Pronoun';
+    if (p.startsWith('prep') || p.includes('preposition')) return 'Preposition';
+    if (p.startsWith('conj') || p.includes('konjunktion') || p.includes('subjunktion')) return 'Conjunction';
+    if (p.startsWith('interj') || p.includes('interjektion')) return 'Interjection';
+    if (p.startsWith('num') || p.includes('räkneord')) return 'Numeral';
+    if (p.startsWith('art') || p.includes('artikel')) return 'Article';
+    return '';
+  }
+
+  function shortPosLabel(posKey) {
+    const map = {
+      Noun: 'noun',
+      Verb: 'verb',
+      Adjective: 'adj',
+      Adverb: 'adv',
+      Pronoun: 'pron',
+      Preposition: 'prep',
+      Conjunction: 'conj',
+      Interjection: 'interj',
+      Numeral: 'num'
+    };
+    return map[posKey] || '';
+  }
+
+  function extractMeaningTokens(text) {
+    return (text || '')
+      .toLowerCase()
+      .replace(/[()[\]{}"'“”’.,!?;:/–—-]+/g, ' ')
+      .split(/\s+/)
+      .map((w) => w.trim())
+      .filter((w) => w.length >= 2 && !EN_STOPWORDS.has(w));
+  }
+
+  function switchSelectedEntrySense(targetPos) {
+    const liveItem = entries.find((e) => e.id === selectedEntryId);
+    if (!liveItem || !liveItem.grammar || !Array.isArray(liveItem.grammar.altSenses)) return;
+    const target = liveItem.grammar.altSenses.find((s) => s.pos === targetPos);
+    if (!target) return;
+
+    liveItem.grammar = {
+      ...liveItem.grammar,
+      v: GRAMMAR_SCHEMA_VERSION,
+      pos: target.pos,
+      forms: target.forms || [],
+      baseForm: target.baseForm || '',
+      userLockedPos: true
+    };
+    scheduleSave(200);
+    renderTermWithArticle(detailTerm, liveItem);
+    renderGrammarData(liveItem.grammar);
+    render();
+  }
+
   function renderGrammarData(grammar) {
     detailGrammarStatus.classList.add('hidden');
-    detailForms.innerHTML = '';
+    detailForms.textContent = '';
 
     if (!grammar || (!grammar.pos && (!grammar.forms || grammar.forms.length === 0))) {
       detailGrammarWrap.classList.add('hidden');
@@ -1714,14 +1812,38 @@
       ? `Grammar & forms (base: ${grammar.baseForm})`
       : 'Grammar & forms';
 
-    if (grammar.pos) {
-      detailPos.textContent = grammar.pos;
-      detailPos.classList.remove('hidden');
-    } else {
+    const altSenses = Array.isArray(grammar.altSenses) ? grammar.altSenses : [];
+    if (altSenses.length > 1 && detailPosSwitch) {
       detailPos.classList.add('hidden');
+      detailPosSwitch.textContent = '';
+      for (const s of altSenses) {
+        const pill = document.createElement('button');
+        pill.type = 'button';
+        const isActive = s.pos === grammar.pos;
+        pill.className = 'grammar-pos-pill' + (isActive ? ' active' : '');
+        pill.textContent = s.pos;
+        pill.setAttribute('aria-pressed', String(isActive));
+        if (s.hint) pill.title = s.hint;
+        pill.addEventListener('click', () => {
+          if (!isActive) switchSelectedEntrySense(s.pos);
+        });
+        detailPosSwitch.appendChild(pill);
+      }
+      detailPosSwitch.classList.remove('hidden');
+    } else {
+      if (detailPosSwitch) {
+        detailPosSwitch.textContent = '';
+        detailPosSwitch.classList.add('hidden');
+      }
+      if (grammar.pos) {
+        detailPos.textContent = grammar.pos;
+        detailPos.classList.remove('hidden');
+      } else {
+        detailPos.classList.add('hidden');
+      }
     }
 
-    if (Array.isArray(grammar.forms)) {
+    if (Array.isArray(grammar.forms) && grammar.forms.length > 0) {
       for (const f of grammar.forms) {
         const card = document.createElement('button');
         card.type = 'button';
@@ -1751,32 +1873,47 @@
 
         detailForms.appendChild(card);
       }
+    } else if (grammar.pos) {
+      const note = document.createElement('p');
+      note.className = 'grammar-invariable';
+      note.textContent = 'Invariable (no inflected forms)';
+      detailForms.appendChild(note);
     }
 
     detailGrammarWrap.classList.remove('hidden');
   }
 
-  // Wiktionary parsing helpers (base form, examples, grammar tables)
+  // Wiktionary parsing helpers (sense-aware base form, examples, translations & grammar tables)
   function stripHtml(html) {
     if (!html) return '';
     const doc = sharedDomParser.parseFromString(html, 'text/html');
     return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
-  function extractWiktionaryHints(enWiktData, sourceWord) {
-    let pos = '';
-    let baseForm = '';
-    const examples = [];
-
-    const svBlocks = Array.isArray(enWiktData?.sv) ? enWiktData.sv : [];
-    if (svBlocks.length > 0) {
-      pos = svBlocks[0].partOfSpeech || '';
+  function isUsableExample(svText) {
+    if (!svText) return false;
+    if (svText.length < 8 || svText.length > 115) return false;
+    if (!svText.includes(' ')) return false;
+    if (/^(Synonymer|Antonymer|Etymologi|Uttal|Jämför|Se även|Besläktade|Sammansättningar|Källa|Varianter|Användning):/i.test(svText)) {
+      return false;
     }
+    return true;
+  }
 
+  function parseEnWiktionarySenses(enWiktData, sourceWord) {
+    const senses = [];
+    const svBlocks = Array.isArray(enWiktData?.sv) ? enWiktData.sv : [];
     const srcLower = (sourceWord || '').trim().toLocaleLowerCase('sv-SE');
+
     for (const block of svBlocks) {
+      const posKey = normalizePosCategory(block.partOfSpeech);
+      const posLabel = posKey || (block.partOfSpeech || '').trim();
+      let baseForm = '';
+      const definitions = [];
+
       const defs = Array.isArray(block.definitions) ? block.definitions : [];
       for (const def of defs) {
+        const defText = stripHtml(def.definition || '');
         if (!baseForm && def.definition && def.definition.includes('form-of-definition')) {
           const doc = sharedDomParser.parseFromString(def.definition, 'text/html');
           const link = doc.querySelector('.form-of-definition-link a');
@@ -1785,26 +1922,41 @@
             baseForm = lemma;
           }
         }
+
+        const examples = [];
         if (Array.isArray(def.parsedExamples)) {
           for (const ex of def.parsedExamples) {
             const svText = stripHtml(ex.example);
             const enText = stripHtml(ex.translation);
-            if (svText && svText.length <= 110 && !examples.some((e) => e.sv === svText)) {
+            if (isUsableExample(svText) && !examples.some((e) => e.sv === svText)) {
               examples.push({ sv: svText, en: enText });
             }
           }
         } else if (Array.isArray(def.examples)) {
           for (const rawEx of def.examples) {
             const svText = stripHtml(rawEx);
-            if (svText && svText.length <= 110 && !examples.some((e) => e.sv === svText)) {
+            if (isUsableExample(svText) && !examples.some((e) => e.sv === svText)) {
               examples.push({ sv: svText, en: '' });
             }
           }
         }
+
+        if (defText || examples.length > 0) {
+          definitions.push({ text: defText, examples });
+        }
+      }
+
+      if (posLabel || definitions.length > 0 || baseForm) {
+        senses.push({
+          posKey,
+          posLabel,
+          baseForm,
+          definitions
+        });
       }
     }
 
-    return { pos, baseForm, examples: examples.slice(0, 2) };
+    return senses;
   }
 
   function isSwedishGrammarTable(table) {
@@ -1977,23 +2129,7 @@
     return { pos: 'Adjective', forms };
   }
 
-  function parseSvWiktionaryHtml(html, preferredPos) {
-    if (!html || !html.includes('grammar')) return null;
-    const doc = sharedDomParser.parseFromString(html, 'text/html');
-    const tables = Array.from(doc.querySelectorAll('table.grammar')).filter(isSwedishGrammarTable);
-    if (tables.length === 0) return null;
-
-    const posLower = (preferredPos || '').toLowerCase();
-    let table = tables[0];
-
-    if (tables.length > 1 && posLower) {
-      const target =
-        posLower === 'verb' ? 'Verb' : posLower === 'noun' ? 'Noun' : posLower === 'adjective' ? 'Adjective' : '';
-      if (target) {
-        table = tables.find((t) => detectTablePos(t) === target) || tables[0];
-      }
-    }
-
+  function parseGrammarTableElement(table, fallbackPos = '') {
     const tablePos = detectTablePos(table);
     if (tablePos === 'Noun') return parseNounTable(table);
     if (tablePos === 'Verb') return parseVerbTable(table);
@@ -2013,16 +2149,314 @@
       forms.push({ label, value });
       if (forms.length >= 6) break;
     }
-    return { pos: preferredPos || tablePos, forms };
+    return { pos: fallbackPos || tablePos, forms };
   }
 
-  async function fetchWiktionaryGrammar(word, signal) {
-    const cleanWord = stripLeadingArticle(word).toLocaleLowerCase('sv-SE');
-    if (!cleanWord || cleanWord.includes(' ')) return null;
+  function getHeadingMeta(el) {
+    if (!el || el.nodeType !== 1) return null;
+    let h = null;
+    if (/^H[234]$/.test(el.tagName)) {
+      h = el;
+    } else if (el.classList && el.classList.contains('mw-heading')) {
+      h = el.querySelector('h2, h3, h4');
+    }
+    if (!h) return null;
+    const level = Number(h.tagName[1]);
+    const text = (h.textContent || '').replace(/\[redigera\]/gi, '').replace(/\s+/g, ' ').trim();
+    return { level, text };
+  }
 
-    let pos = '';
-    let forms = [];
-    let baseForm = '';
+  function parseTranslationTerms(rawText) {
+    return rawText
+      .replace(/^\s*(engelska|thailändska)\s*:\s*/i, '')
+      .replace(/\([a-z]{2,3}\)/gi, ' ')
+      .replace(/\[[^\]]*\]/g, ' ')
+      .replace(/\([^)]*\)/g, ' ')
+      .split(/[,;]+/)
+      .map((s) => s.replace(/\s+/g, ' ').trim())
+      .filter((s) => s.length >= 2 && s.length <= 50 && !/^[mfncu]$|^pl$/i.test(s));
+  }
+
+  // Strictly parses ONLY the Swedish (Svenska) h2 section, keeping grammar tables,
+  // examples and translations isolated inside their owning h3 POS section!
+  function parseSvWiktionarySections(html) {
+    if (!html) return [];
+    const doc = sharedDomParser.parseFromString(html, 'text/html');
+    const root = doc.querySelector('.mw-parser-output') || doc.body;
+    const children = Array.from(root.children);
+
+    const sections = [];
+    let inSwedish = false;
+    let current = null;
+    let inTranslations = false;
+
+    for (const el of children) {
+      const heading = getHeadingMeta(el);
+      if (heading) {
+        if (heading.level === 2) {
+          if (heading.text.toLowerCase() === 'svenska') {
+            inSwedish = true;
+            current = null;
+            inTranslations = false;
+            continue;
+          }
+          if (inSwedish) break; // Reached next language (Danska, Isländska, etc.)
+          continue;
+        }
+        if (!inSwedish) continue;
+
+        if (heading.level === 3) {
+          const posKey = normalizePosCategory(heading.text);
+          if (posKey) {
+            current = {
+              posKey,
+              posLabel: posKey,
+              forms: [],
+              enTerms: [],
+              thTerms: [],
+              examples: [],
+              svDefs: []
+            };
+            sections.push(current);
+          } else {
+            current = null;
+          }
+          inTranslations = false;
+          continue;
+        }
+
+        if (heading.level === 4 && current) {
+          inTranslations = heading.text.toLowerCase().includes('översättning');
+          continue;
+        }
+      }
+
+      if (!inSwedish || !current) continue;
+
+      // 1. Grammar table strictly bound to THIS h3 section
+      if (!inTranslations && current.forms.length === 0) {
+        const table = el.matches?.('table.grammar') ? el : el.querySelector?.('table.grammar');
+        if (table && isSwedishGrammarTable(table)) {
+          const tablePos = detectTablePos(table);
+          if (!tablePos || tablePos === current.posKey) {
+            const parsed = parseGrammarTableElement(table, current.posKey);
+            if (parsed.pos) current.posLabel = parsed.pos;
+            current.forms = parsed.forms || [];
+          }
+        }
+      }
+
+      // 2. Swedish definitions & usage examples from <ol> under THIS h3 section
+      if (!inTranslations && el.tagName === 'OL') {
+        const dds = el.querySelectorAll('dd');
+        for (const dd of dds) {
+          if (dd.classList.contains('semantic-relation')) continue;
+          const italic = dd.querySelector('i');
+          if (!italic) continue;
+          const svEx = cleanCellText(italic);
+          if (isUsableExample(svEx) && !current.examples.some((e) => e.sv === svEx)) {
+            current.examples.push({ sv: svEx, en: '' });
+          }
+        }
+      }
+
+      // 3. English & Thai translations inside <h4 id="Översättningar"> of THIS h3 section
+      if (inTranslations) {
+        const lis = el.querySelectorAll('li');
+        for (const li of lis) {
+          const txt = cleanCellText(li);
+          if (/^engelska\s*:/i.test(txt)) {
+            for (const term of parseTranslationTerms(txt)) {
+              if (!current.enTerms.some((t) => t.toLowerCase() === term.toLowerCase())) {
+                current.enTerms.push(term);
+              }
+            }
+          } else if (/^thailändska\s*:/i.test(txt)) {
+            for (const term of parseTranslationTerms(txt)) {
+              if (!current.thTerms.includes(term)) {
+                current.thTerms.push(term);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return sections;
+  }
+
+  function hasTermOverlap(enTerms, defs) {
+    if (!enTerms.length || !defs.length) return false;
+    const defBlob = defs.map((d) => d.text.toLowerCase()).join(' ');
+    return enTerms.some((t) => {
+      const tl = t.toLowerCase();
+      return tl.length >= 3 && defBlob.includes(tl);
+    });
+  }
+
+  function buildWordSenses(enWiktData, svHtml, cleanWord) {
+    const svSections = parseSvWiktionarySections(svHtml);
+    const enSenses = parseEnWiktionarySenses(enWiktData, cleanWord);
+    const merged = svSections.map((s) => ({
+      posKey: s.posKey,
+      posLabel: s.posLabel,
+      forms: s.forms,
+      baseForm: '',
+      enTerms: s.enTerms.slice(),
+      thTerms: s.thTerms.slice(),
+      definitions: [],
+      svExamples: s.examples.slice()
+    }));
+
+    for (const enS of enSenses) {
+      let target = null;
+      const samePos = merged.filter((m) => m.posKey === enS.posKey);
+      if (samePos.length === 1) {
+        target = samePos[0];
+      } else if (samePos.length > 1) {
+        target = samePos.find((m) => hasTermOverlap(m.enTerms, enS.definitions)) || samePos[0];
+      } else if (enS.posKey === 'Adverb') {
+        // Bridge Swedish indefinite pronouns (e.g. "allting" = Pronoun on sv.wikt, Adverb on en.wikt)
+        const pron = merged.find((m) => m.posKey === 'Pronoun' && hasTermOverlap(m.enTerms, enS.definitions));
+        if (pron) target = pron;
+      }
+
+      if (target) {
+        target.definitions.push(...enS.definitions);
+        if (!target.baseForm && enS.baseForm) target.baseForm = enS.baseForm;
+      } else {
+        merged.push({
+          posKey: enS.posKey,
+          posLabel: enS.posLabel || enS.posKey,
+          forms: [],
+          baseForm: enS.baseForm,
+          enTerms: [],
+          thTerms: [],
+          definitions: enS.definitions.slice(),
+          svExamples: []
+        });
+      }
+    }
+
+    for (const s of merged) {
+      const hintParts = [];
+      if (s.enTerms.length > 0) hintParts.push(...s.enTerms.slice(0, 2));
+      else if (s.definitions.length > 0) hintParts.push(s.definitions[0].text.slice(0, 50));
+      s.hint = hintParts.join(', ');
+    }
+
+    return merged;
+  }
+
+  function scoreSenseAgainstMeaning(sense, enMeaning, preferredPos = '') {
+    let score = 0;
+    const rawEn = (enMeaning || '').trim().toLowerCase();
+    const tokens = extractMeaningTokens(rawEn);
+    const normPref = normalizePosCategory(preferredPos);
+
+    if (normPref && sense.posKey === normPref) {
+      score += 45;
+    }
+
+    if (rawEn) {
+      // Infinitive "to <verb>" or English modal/aux hints strongly indicate Verb
+      if (/^to\s+[a-z]{2,}/i.test(rawEn) || tokens.some((t) => EN_MODAL_OR_AUX_VERBS.has(t))) {
+        if (sense.posKey === 'Verb') score += 30;
+      }
+
+      const chunks = rawEn
+        .split(/[/,;]+/)
+        .map((c) => c.replace(/^to\s+/i, '').trim())
+        .filter((c) => c.length >= 2);
+
+      // 1. Score against sv.wiktionary English translations in THIS h3 section
+      for (const term of sense.enTerms || []) {
+        const tl = term.toLowerCase();
+        if (chunks.includes(tl)) {
+          score += 100;
+        } else {
+          for (const tok of tokens) {
+            if (tl === tok) score += 60;
+            else if (tok.length >= 4 && tl.includes(tok)) score += 20;
+          }
+        }
+      }
+
+      // 2. Score against en.wiktionary definitions in THIS sense
+      for (const def of sense.definitions || []) {
+        const dl = (def.text || '').toLowerCase();
+        if (!dl) continue;
+        const cleanDef = dl.replace(/^to\s+/, '').replace(/\([^)]*\)/g, '').trim();
+        if (chunks.some((c) => cleanDef === c || cleanDef.startsWith(c + ';') || cleanDef.startsWith(c + ','))) {
+          score += 90;
+        } else {
+          const defTokens = new Set(extractMeaningTokens(dl));
+          for (const tok of tokens) {
+            if (defTokens.has(tok)) score += 45;
+            else if (tok.length >= 4 && dl.includes(tok)) score += 15;
+          }
+        }
+      }
+    }
+
+    return score;
+  }
+
+  function pickBestSense(senses, enMeaning = '', preferredPos = '') {
+    if (!Array.isArray(senses) || senses.length === 0) return null;
+    if (senses.length === 1) return senses[0];
+
+    let best = senses[0];
+    let bestScore = -1;
+    for (const s of senses) {
+      const sc = scoreSenseAgainstMeaning(s, enMeaning, preferredPos);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = s;
+      }
+    }
+
+    // If no sense matched the English text directly, avoid latching onto an unrelated specialized Noun
+    // when an inflected verb/baseForm sense exists (e.g. "får" -> "may/get" vs "sheep")
+    if (bestScore === 0 && (enMeaning || '').trim()) {
+      const inflected = senses.find((s) => s.baseForm);
+      if (inflected) return inflected;
+    }
+
+    return best;
+  }
+
+  function pickExamplesForSense(sense, enMeaning = '', maxItems = 2) {
+    if (!sense) return [];
+    const tokens = extractMeaningTokens(enMeaning);
+    const rankedDefs = (sense.definitions || [])
+      .map((def, idx) => {
+        const defTokens = new Set(extractMeaningTokens(def.text || ''));
+        let hits = 0;
+        for (const tok of tokens) {
+          if (defTokens.has(tok)) hits++;
+        }
+        return { def, hits, idx };
+      })
+      .sort((a, b) => b.hits - a.hits || a.idx - b.idx);
+
+    const out = [];
+    for (const { def } of rankedDefs) {
+      for (const ex of def.examples || []) {
+        if (!out.some((e) => e.sv === ex.sv)) out.push({ ...ex });
+        if (out.length >= maxItems) return out;
+      }
+    }
+    for (const ex of sense.svExamples || []) {
+      if (!out.some((e) => e.sv === ex.sv)) out.push({ ...ex });
+      if (out.length >= maxItems) return out;
+    }
+    return out;
+  }
+
+  async function fetchWordSensesData(word, signal) {
+    const cleanWord = stripLeadingArticle(word).toLocaleLowerCase('sv-SE');
+    if (!cleanWord || cleanWord.includes(' ')) return { cleanWord: '', senses: [] };
 
     const [enRes, svRes] = await Promise.allSettled([
       fetchWithTimeout(
@@ -2035,37 +2469,79 @@
       ).then((r) => (r.ok ? r.json() : null))
     ]);
 
-    if (enRes.status === 'fulfilled' && enRes.value) {
-      const hints = extractWiktionaryHints(enRes.value, cleanWord);
-      pos = hints.pos;
-      baseForm = hints.baseForm;
+    const enData = enRes.status === 'fulfilled' ? enRes.value : null;
+    const svHtml = svRes.status === 'fulfilled' ? svRes.value?.parse?.text?.['*'] || '' : '';
+    const senses = buildWordSenses(enData, svHtml, cleanWord);
+    return { cleanWord, senses };
+  }
+
+  async function resolveBaseFormTable(sense, signal) {
+    if (!sense || sense.forms.length > 0 || !sense.baseForm || (signal && signal.aborted)) return;
+    try {
+      const baseRes = await fetchWithTimeout(
+        `https://sv.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(sense.baseForm.toLocaleLowerCase('sv-SE'))}&prop=text&format=json&origin=*`,
+        { signal, timeoutMs: 8000 }
+      ).then((r) => (r.ok ? r.json() : null));
+      const baseHtml = baseRes?.parse?.text?.['*'] || '';
+      if (!baseHtml) return;
+      const baseSections = parseSvWiktionarySections(baseHtml);
+      // Strictly match the sense's own POS category!
+      const matching = baseSections.find((s) => s.posKey === sense.posKey && s.forms.length > 0);
+      if (matching) {
+        sense.posLabel = matching.posLabel || sense.posLabel;
+        sense.forms = matching.forms;
+      }
+    } catch (_) {}
+  }
+
+  async function fetchWiktionaryGrammar(word, { signal, enMeaning = '', preferredPos = '', cachedSenses = null } = {}) {
+    const cleanWord = stripLeadingArticle(word).toLocaleLowerCase('sv-SE');
+    if (!cleanWord || cleanWord.includes(' ')) return null;
+
+    let senses = Array.isArray(cachedSenses) && cachedSenses.length > 0 ? cachedSenses : null;
+    if (!senses) {
+      const res = await fetchWordSensesData(cleanWord, signal);
+      senses = res.senses;
+    }
+    if (!senses || senses.length === 0) return null;
+
+    const chosen = pickBestSense(senses, enMeaning, preferredPos);
+    if (!chosen) return null;
+
+    // Resolve base-form conjugation table strictly for the chosen sense (and any inflected alt senses)
+    await resolveBaseFormTable(chosen, signal);
+    const otherInflected = senses.filter((s) => s !== chosen && s.forms.length === 0 && s.baseForm).slice(0, 2);
+    if (otherInflected.length > 0 && !(signal && signal.aborted)) {
+      await Promise.allSettled(otherInflected.map((s) => resolveBaseFormTable(s, signal)));
     }
 
-    let parsed = null;
-    if (svRes.status === 'fulfilled' && svRes.value?.parse?.text?.['*']) {
-      parsed = parseSvWiktionaryHtml(svRes.value.parse.text['*'], pos);
-    }
-
-    // If word is an inflected form (e.g. "tappade") without its own table, look up its base form ("tappa")
-    if ((!parsed || parsed.forms.length === 0) && baseForm && !(signal && signal.aborted)) {
-      try {
-        const baseRes = await fetchWithTimeout(
-          `https://sv.wiktionary.org/w/api.php?action=parse&page=${encodeURIComponent(baseForm.toLocaleLowerCase('sv-SE'))}&prop=text&format=json&origin=*`,
-          { signal, timeoutMs: 8000 }
-        ).then((r) => (r.ok ? r.json() : null));
-        if (baseRes?.parse?.text?.['*']) {
-          parsed = parseSvWiktionaryHtml(baseRes.parse.text['*'], pos);
-        }
-      } catch (_) {}
-    }
-
-    if (parsed) {
-      pos = parsed.pos || pos;
-      forms = parsed.forms || [];
-    }
-
+    const pos = chosen.posLabel || chosen.posKey || '';
+    const forms = chosen.forms || [];
+    const baseForm = chosen.baseForm || '';
     if (!pos && forms.length === 0) return null;
-    return { v: GRAMMAR_SCHEMA_VERSION, pos, forms, baseForm: baseForm || '' };
+
+    // Deduplicate alternative senses by posLabel for the compact switcher
+    const altSenses = [];
+    const seenPos = new Set();
+    for (const s of senses) {
+      const pLabel = s.posLabel || s.posKey;
+      if (!pLabel || seenPos.has(pLabel)) continue;
+      seenPos.add(pLabel);
+      altSenses.push({
+        pos: pLabel,
+        ...(s.hint ? { hint: s.hint } : {}),
+        forms: s.forms || [],
+        ...(s.baseForm ? { baseForm: s.baseForm } : {})
+      });
+    }
+
+    return {
+      v: GRAMMAR_SCHEMA_VERSION,
+      pos,
+      forms,
+      baseForm,
+      ...(altSenses.length > 1 ? { altSenses } : {})
+    };
   }
 
   async function loadAndRenderGrammar(item) {
@@ -2076,6 +2552,7 @@
 
     const entryId = item.id;
     const expectedTerm = item.term;
+    const expectedEn = item.en || '';
     const baseTerm = stripLeadingArticle(item.term);
     if (item.type !== 'word' || baseTerm.includes(' ')) {
       detailGrammarWrap.classList.add('hidden');
@@ -2097,6 +2574,7 @@
     }
 
     detailPos.classList.add('hidden');
+    if (detailPosSwitch) detailPosSwitch.classList.add('hidden');
     detailForms.textContent = '';
     detailGrammarTitle.textContent = 'Grammar & forms';
     detailGrammarStatus.textContent = 'Loading grammar...';
@@ -2120,14 +2598,20 @@
     grammarAbortController = controller;
 
     try {
-      const grammar = await fetchWiktionaryGrammar(expectedTerm, controller.signal);
+      const lockedPos = item.grammar?.userLockedPos ? item.grammar.pos : '';
+      const grammar = await fetchWiktionaryGrammar(expectedTerm, {
+        signal: controller.signal,
+        enMeaning: expectedEn,
+        preferredPos: lockedPos
+      });
       if (controller.signal.aborted) return;
       const liveItem = entries.find((e) => e.id === entryId);
       if (!liveItem || liveItem.term !== expectedTerm) return;
       if (grammar) {
+        if (lockedPos) grammar.userLockedPos = true;
         liveItem.grammar = grammar;
         scheduleSave(300);
-        // Refresh list & detail heading in case Noun (en)/(ett) was just discovered
+        // Refresh list & detail heading in case Noun (en)/(ett) was just discovered or corrected
         if (selectedEntryId === entryId) {
           renderTermWithArticle(detailTerm, liveItem);
         }
@@ -2193,7 +2677,7 @@
     showUndoToast(deletedItem);
   });
 
-  // Duplicate detection helper (preserves Swedish å, ä, ö)
+  // Duplicate detection helper (preserves Swedish å, ä, ö and supports distinct homograph meanings)
   function findDuplicate(term, excludeId = null) {
     const key = getCanonicalKey(term);
     if (!key) return null;
@@ -2202,11 +2686,31 @@
     );
   }
 
+  function areSameMeaning(a, b) {
+    const aEn = extractMeaningTokens(a.en || '');
+    const bEn = extractMeaningTokens(b.en || '');
+    if (aEn.length > 0 && bEn.length > 0) {
+      const bSet = new Set(bEn);
+      return aEn.some((t) => bSet.has(t));
+    }
+    const aTh = normalizeThaiForSearch(a.th || '');
+    const bTh = normalizeThaiForSearch(b.th || '');
+    if (aTh && bTh) return aTh === bTh || aTh.includes(bTh) || bTh.includes(aTh);
+    return true;
+  }
+
   function updateDuplicateNotice() {
     const dup = findDuplicate(termInput.value, editingEntryId);
     duplicateEntryRef = dup;
     if (dup) {
-      duplicateText.textContent = `"${dup.term}" is already in ${dup.type === 'phrase' ? 'Phrases' : 'Words'}.`;
+      const shortMeaning = (dup.en || dup.th || '').trim();
+      const meaningHint = shortMeaning ? ` (${shortMeaning.slice(0, 28)})` : '';
+      const typedEn = enInput.value.trim();
+      const isDifferentMeaning =
+        Boolean(typedEn && dup.en) && !areSameMeaning({ en: typedEn, th: thInput.value.trim() }, dup);
+      duplicateText.textContent = isDifferentMeaning
+        ? `"${dup.term}"${meaningHint} exists — Save adds another meaning.`
+        : `"${dup.term}"${meaningHint} is already in ${dup.type === 'phrase' ? 'Phrases' : 'Words'}.`;
       duplicateNotice.classList.remove('hidden');
     } else {
       duplicateNotice.classList.add('hidden');
@@ -2248,6 +2752,10 @@
   });
 
   function clearFormSuggestions() {
+    if (exampleChipTranslateController) {
+      exampleChipTranslateController.abort();
+      exampleChipTranslateController = null;
+    }
     svSuggestions.textContent = '';
     svSuggestions.classList.add('hidden');
     enSuggestions.textContent = '';
@@ -2259,6 +2767,9 @@
     baseFormNotice.classList.add('hidden');
     suggestedBaseForm = '';
     pendingExampleEn = '';
+    formWiktSenses = [];
+    formWiktTerm = '';
+    selectedFormPos = '';
   }
 
   function openForm(
@@ -2274,6 +2785,11 @@
       wiktFormAbortController.abort();
       wiktFormAbortController = null;
     }
+    if (exampleChipTranslateController) {
+      exampleChipTranslateController.abort();
+      exampleChipTranslateController = null;
+    }
+    clearTimeout(enSyncDebounceTimer);
     translateReqId++;
     formSavedThisSession = false;
     formError.classList.add('hidden');
@@ -2328,6 +2844,11 @@
       wiktFormAbortController.abort();
       wiktFormAbortController = null;
     }
+    if (exampleChipTranslateController) {
+      exampleChipTranslateController.abort();
+      exampleChipTranslateController = null;
+    }
+    clearTimeout(enSyncDebounceTimer);
     translateReqId++;
     if (!formSavedThisSession) {
       telemetry?.trackFormClose({
@@ -2388,7 +2909,12 @@
     exampleSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
   });
 
-  function enrichEntryInBackground(entryId, expectedTerm, expectedExample) {
+  function enrichEntryInBackground(
+    entryId,
+    expectedTerm,
+    expectedExample,
+    { enMeaning = '', preferredPos = '', cachedSenses = null } = {}
+  ) {
     if (!entryId || !navigator.onLine) return Promise.resolve();
     if (inFlightEnrichments.has(entryId)) return inFlightEnrichments.get(entryId);
 
@@ -2408,7 +2934,11 @@
         (!initial.grammar || initial.grammar.v < GRAMMAR_SCHEMA_VERSION)
       ) {
         tasks.push(
-          fetchWiktionaryGrammar(initial.term)
+          fetchWiktionaryGrammar(initial.term, {
+            enMeaning: enMeaning || initial.en || '',
+            preferredPos,
+            cachedSenses
+          })
             .then((grammar) => {
               if (grammar) fetchedGrammar = grammar;
             })
@@ -2468,6 +2998,11 @@
 
   termInput.addEventListener('input', () => {
     svSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
+    if (getCanonicalKey(termInput.value) !== formWiktTerm) {
+      formWiktSenses = [];
+      formWiktTerm = '';
+      selectedFormPos = '';
+    }
     updateDuplicateNotice();
     const wordCount = termInput.value.trim().split(/\s+/).filter(Boolean).length;
     if (!editingEntryId && formType === 'word' && wordCount >= 3) {
@@ -2489,6 +3024,11 @@
     }
 
     const isNewEntry = !editingEntryId;
+    const chosenPosForSave = selectedFormPos;
+    const cachedSensesForSave =
+      formWiktTerm && formWiktTerm === getCanonicalKey(term) && formWiktSenses.length > 0
+        ? formWiktSenses.slice()
+        : null;
     let savedEntry = null;
 
     if (editingEntryId) {
@@ -2496,8 +3036,10 @@
         if (item.id !== editingEntryId) return item;
         const termChanged =
           item.term.trim().toLocaleLowerCase('sv-SE') !== term.toLocaleLowerCase('sv-SE');
+        const enChanged = (item.en || '').trim().toLowerCase() !== en.toLowerCase();
         const exampleChanged = (item.example || '').trim() !== example;
-        const clearGrammar = termChanged || formType !== 'word';
+        const clearGrammar =
+          termChanged || formType !== 'word' || (enChanged && !item.grammar?.userLockedPos);
         savedEntry = {
           ...item,
           type: formType,
@@ -2554,7 +3096,11 @@
     closeForm({ saved: true });
     render();
     if (savedEntry) {
-      enrichEntryInBackground(savedEntry.id, savedEntry.term, savedEntry.example || '');
+      enrichEntryInBackground(savedEntry.id, savedEntry.term, savedEntry.example || '', {
+        enMeaning: savedEntry.en,
+        preferredPos: chosenPosForSave,
+        cachedSenses: cachedSensesForSave
+      });
     }
   });
 
@@ -2727,17 +3273,25 @@
         return;
       }
 
-      const existingKeys = new Set(entries.map((e) => getCanonicalKey(e.term)));
+      const existingByKey = new Map();
+      for (const e of entries) {
+        const k = getCanonicalKey(e.term);
+        if (!existingByKey.has(k)) existingByKey.set(k, []);
+        existingByKey.get(k).push(e);
+      }
       const usedIds = new Set(entries.map((e) => e.id));
       let added = 0;
       for (const raw of list) {
         const clean = sanitizeEntry(raw, usedIds);
         if (!clean) continue;
         const key = getCanonicalKey(clean.term);
-        if (existingKeys.has(key)) continue;
+        const sameTermList = existingByKey.get(key) || [];
+        // Preserve homographs (same Swedish word with a clearly different English/Thai meaning)
+        if (sameTermList.some((existing) => areSameMeaning(existing, clean))) continue;
 
         entries.push(clean);
-        existingKeys.add(key);
+        if (!existingByKey.has(key)) existingByKey.set(key, []);
+        existingByKey.get(key).push(clean);
         added++;
       }
 
@@ -3003,13 +3557,38 @@
     return { primary, dictEntries };
   }
 
+  function isSuspiciousSingleCharTranslation(sourceText, translated, toLang) {
+    if (!translated) return true;
+    const srcLen = (sourceText || '').trim().length;
+    if (srcLen >= 3 && translated.length === 1 && toLang !== 'th') {
+      return true;
+    }
+    return false;
+  }
+
   async function fetchMyMemoryFallback(text, fromLang, toLang, signal) {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${fromLang}|${toLang}`;
     const res = await fetchWithTimeout(url, { signal, timeoutMs: 8000 });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    const primary = (data?.responseData?.translatedText || '').trim();
-    if (!primary || primary.toUpperCase().includes('MYMEMORY WARNING')) {
+    let primary = (data?.responseData?.translatedText || '').trim();
+    if (primary.toUpperCase().includes('MYMEMORY WARNING') || isSuspiciousSingleCharTranslation(text, primary, toLang)) {
+      primary = '';
+    }
+    // Check secondary MyMemory matches if primary was empty or single-char garbage
+    if (!primary && Array.isArray(data?.matches)) {
+      const good = data.matches.find((m) => {
+        const t = (m?.translation || '').trim();
+        return (
+          t &&
+          !t.toUpperCase().includes('MYMEMORY WARNING') &&
+          !isSuspiciousSingleCharTranslation(text, t, toLang) &&
+          t.toLowerCase() !== text.trim().toLowerCase()
+        );
+      });
+      if (good) primary = good.translation.trim();
+    }
+    if (!primary) {
       throw new Error('No translation');
     }
     return { primary, dictEntries: [] };
@@ -3026,35 +3605,164 @@
     }
   }
 
-  function buildCandidateList(result, sourceText, maxItems = 5) {
+  function buildCandidateList(result, sourceText, maxItems = 5, { preferredPos = '', priorityTerms = [] } = {}) {
     const seen = new Set();
     const list = [];
+    const normPref = normalizePosCategory(preferredPos);
 
-    const add = (text, hint = '') => {
+    const add = (text, hint = '', posKey = '') => {
       if (!text) return;
       const cleaned = text.trim();
       if (!cleaned) return;
       const key = cleaned.toLowerCase();
       if (key === sourceText.trim().toLowerCase() || seen.has(key)) return;
       seen.add(key);
-      list.push({ text: cleaned, hint });
+      list.push({ text: cleaned, hint, posKey });
     };
 
-    add(result.primary);
-    for (const item of result.dictEntries) {
-      const hint = item.back || item.pos || '';
-      add(item.text, hint);
-      if (list.length >= maxItems) break;
+    // 1. Optional Wiktionary sense-specific terms (e.g. Thai translations in matched h3 section)
+    for (const term of priorityTerms) {
+      add(term, 'Wiktionary', normPref);
+      if (list.length >= maxItems) return list.slice(0, maxItems);
+    }
+
+    // 2. If preferredPos is given, prioritize Google dict entries with matching POS
+    const dictEntries = Array.isArray(result.dictEntries) ? result.dictEntries : [];
+    const matchingPosEntries = normPref
+      ? dictEntries.filter((d) => normalizePosCategory(d.pos) === normPref)
+      : [];
+
+    if (matchingPosEntries.length > 0) {
+      // Keep primary first only if it doesn't belong exclusively to a different POS
+      const primaryKey = (result.primary || '').trim().toLowerCase();
+      const primaryInWrongPos =
+        primaryKey &&
+        !matchingPosEntries.some((d) => d.text.toLowerCase() === primaryKey) &&
+        dictEntries.some((d) => d.text.toLowerCase() === primaryKey);
+      if (!primaryInWrongPos) {
+        add(result.primary, '', normPref);
+      }
+      for (const item of matchingPosEntries) {
+        const hint = item.back || shortPosLabel(normPref) || item.pos || '';
+        add(item.text, hint, normPref);
+        if (list.length >= maxItems) break;
+      }
+    } else {
+      add(result.primary);
+    }
+
+    // 3. Fill remaining slots with diverse POS entries so homographs surface all key meanings
+    if (list.length < maxItems) {
+      const seenPosInDict = new Set(list.map((x) => x.posKey).filter(Boolean));
+      for (const item of dictEntries) {
+        const pk = normalizePosCategory(item.pos);
+        if (pk && !seenPosInDict.has(pk)) {
+          seenPosInDict.add(pk);
+          const hint = item.back || shortPosLabel(pk) || item.pos || '';
+          add(item.text, hint, pk);
+          if (list.length >= maxItems) break;
+        }
+      }
+    }
+
+    if (list.length < maxItems) {
+      for (const item of dictEntries) {
+        const pk = normalizePosCategory(item.pos);
+        const hint = item.back || shortPosLabel(pk) || item.pos || '';
+        add(item.text, hint, pk);
+        if (list.length >= maxItems) break;
+      }
     }
 
     if (list.length === 0 && result.primary) {
-      list.push({ text: result.primary, hint: '' });
+      list.push({ text: result.primary, hint: '', posKey: normPref });
+    }
+    return list.slice(0, maxItems);
+  }
+
+  function buildEnglishCandidates(result, svText, senses = [], maxItems = 6) {
+    const dictEntries = Array.isArray(result.dictEntries) ? result.dictEntries : [];
+    const seen = new Set();
+    const list = [];
+
+    const inferPosForEn = (enWord, googlePosRaw) => {
+      if (senses.length > 0) {
+        const best = pickBestSense(senses, enWord, '');
+        if (best && scoreSenseAgainstMeaning(best, enWord, '') >= 45) {
+          return best.posKey;
+        }
+      }
+      return normalizePosCategory(googlePosRaw);
+    };
+
+    const add = (text, googlePosRaw = '') => {
+      if (!text) return;
+      const cleaned = text.trim();
+      if (!cleaned) return;
+      const key = cleaned.toLowerCase();
+      if (key === svText.trim().toLowerCase() || seen.has(key)) return;
+      seen.add(key);
+      const posKey = inferPosForEn(cleaned, googlePosRaw);
+      list.push({ text: cleaned, posKey, posShort: shortPosLabel(posKey) });
+    };
+
+    const primaryDictMatch = dictEntries.find(
+      (d) => d.text.toLowerCase() === (result.primary || '').trim().toLowerCase()
+    );
+    const isWeakFallback = result.provider === 'mymemory' || result.provider === 'wiktionary';
+
+    // When machine translation fell back to MyMemory (no dictionary), prioritize verified Wiktionary sense translations first!
+    if (isWeakFallback && senses.length > 0) {
+      for (const s of senses) {
+        for (const t of (s.enTerms || []).slice(0, 2)) {
+          add(t, s.posKey);
+          if (list.length >= maxItems) break;
+        }
+        if (list.length >= maxItems) break;
+      }
+    }
+
+    if (!isSuspiciousSingleCharTranslation(svText, result.primary, 'en')) {
+      add(result.primary, primaryDictMatch?.pos || '');
+    }
+
+    // First pass: ensure at least one top candidate from EACH distinct POS block (e.g. short (adj) + card (noun))
+    const representedPos = new Set(list.map((c) => c.posKey).filter(Boolean));
+    for (const item of dictEntries) {
+      const pk = inferPosForEn(item.text, item.pos);
+      if (pk && !representedPos.has(pk)) {
+        representedPos.add(pk);
+        add(item.text, item.pos);
+        if (list.length >= maxItems) break;
+      }
+    }
+
+    // Second pass: add Wiktionary sense translations if Google Translate missed an important POS
+    if (list.length < maxItems && senses.length > 1) {
+      for (const s of senses) {
+        if (s.posKey && !representedPos.has(s.posKey) && s.enTerms && s.enTerms.length > 0) {
+          representedPos.add(s.posKey);
+          add(s.enTerms[0], s.posKey);
+          if (list.length >= maxItems) break;
+        }
+      }
+    }
+
+    // Third pass: fill remaining slots in Google's relevance order
+    for (const item of dictEntries) {
+      if (list.length >= maxItems) break;
+      add(item.text, item.pos);
+    }
+
+    if (list.length === 0 && result.primary) {
+      const pk = inferPosForEn(result.primary, '');
+      list.push({ text: result.primary, posKey: pk, posShort: shortPosLabel(pk) });
     }
     return list.slice(0, maxItems);
   }
 
   function renderSwedishChips(candidates) {
-    svSuggestions.innerHTML = '';
+    svSuggestions.textContent = '';
     if (candidates.length === 0) {
       svSuggestions.classList.add('hidden');
       return;
@@ -3069,6 +3777,7 @@
         btn.classList.add('active');
         termInput.value = cand.text;
         updateDuplicateNotice();
+        fetchWiktionaryFormSuggestions(cand.text, enInput.value.trim(), selectedFormPos);
       });
       svSuggestions.appendChild(btn);
     });
@@ -3076,7 +3785,7 @@
   }
 
   function renderThaiChips(candidates) {
-    thSuggestions.innerHTML = '';
+    thSuggestions.textContent = '';
     if (candidates.length <= 1) {
       thSuggestions.classList.add('hidden');
       return;
@@ -3103,11 +3812,17 @@
   }
 
   function renderExampleSuggestions(examples) {
-    exampleSuggestions.innerHTML = '';
+    if (exampleChipTranslateController) {
+      exampleChipTranslateController.abort();
+      exampleChipTranslateController = null;
+    }
+    exampleSuggestions.textContent = '';
     if (!examples || examples.length === 0) {
       exampleSuggestions.classList.add('hidden');
       return;
     }
+
+    const toTranslate = [];
     for (const ex of examples) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -3120,8 +3835,30 @@
         btn.classList.add('active');
       });
       exampleSuggestions.appendChild(btn);
+      if (!ex.en && navigator.onLine) {
+        toTranslate.push({ ex, btn });
+      }
     }
     exampleSuggestions.classList.remove('hidden');
+
+    // Translate Swedish-only Wiktionary examples in the background so English context shows right on the chip
+    if (toTranslate.length > 0) {
+      const ctrl = new AbortController();
+      exampleChipTranslateController = ctrl;
+      Promise.allSettled(
+        toTranslate.map(async ({ ex, btn }) => {
+          const res = await translateWithDict(ex.sv, 'sv', 'en', ctrl.signal);
+          if (ctrl.signal.aborted || !res?.primary || !document.contains(btn)) return;
+          ex.en = res.primary;
+          btn.textContent = `Use: "${ex.sv}" (${ex.en})`;
+          if (btn.classList.contains('active') && exampleInput.value.trim() === ex.sv) {
+            pendingExampleEn = ex.en;
+          }
+        })
+      ).finally(() => {
+        if (exampleChipTranslateController === ctrl) exampleChipTranslateController = null;
+      });
+    }
   }
 
   function startTranslateRequest() {
@@ -3133,19 +3870,36 @@
     return { reqId: translateReqId, signal: translateAbortController.signal };
   }
 
-  async function translateThaiFromEnglish(enText, existingReq = null) {
+  async function translateThaiFromEnglish(enText, existingReq = null, preferredPos = '') {
     if (!enText) return;
     const { reqId, signal } = existingReq || startTranslateRequest();
 
     retranslateThBtn.disabled = true;
-    thSuggestions.innerHTML = '';
+    thSuggestions.textContent = '';
     thSuggestions.classList.add('hidden');
     translateStatus.textContent = `Translating "${enText}" to Thai...`;
     translateStatus.classList.remove('error', 'hidden');
     try {
       const result = await translateWithDict(enText, 'en', 'th', signal);
       if (reqId !== translateReqId || signal.aborted) return;
-      const candidates = buildCandidateList(result, enText, 5);
+
+      // Boost Thai terms from matched sv.wiktionary sense (if available) + matching POS from Google dict
+      let wiktThTerms = [];
+      let effectivePos = preferredPos;
+      if (formWiktSenses.length > 0) {
+        const matched = pickBestSense(formWiktSenses, enText, preferredPos);
+        if (matched) {
+          if (!effectivePos && matched.posKey) effectivePos = matched.posKey;
+          if (matched.thTerms && matched.thTerms.length > 0) {
+            wiktThTerms = matched.thTerms.slice(0, 2);
+          }
+        }
+      }
+
+      const candidates = buildCandidateList(result, enText, 5, {
+        preferredPos: effectivePos,
+        priorityTerms: wiktThTerms
+      });
       if (candidates.length > 0) {
         thInput.value = candidates[0].text;
         renderThaiChips(candidates);
@@ -3166,22 +3920,56 @@
     }
   }
 
+  function applyMatchedFormWiktHints(enMeaning = '', preferredPos = '') {
+    if (!formWiktSenses.length || formBackdrop.classList.contains('hidden')) return;
+    const sense = pickBestSense(formWiktSenses, enMeaning, preferredPos);
+    if (!sense) return;
+
+    if (sense.baseForm) {
+      suggestedBaseForm = sense.baseForm;
+      useBaseFormBtn.textContent = sense.baseForm;
+      baseFormNotice.classList.remove('hidden');
+    } else {
+      suggestedBaseForm = '';
+      baseFormNotice.classList.add('hidden');
+    }
+
+    if (!exampleInput.value.trim()) {
+      const senseExamples = pickExamplesForSense(sense, enMeaning, 2);
+      renderExampleSuggestions(senseExamples);
+    }
+  }
+
   function renderEnglishChips(candidates) {
-    enSuggestions.innerHTML = '';
+    enSuggestions.textContent = '';
     if (candidates.length === 0) {
       enSuggestions.classList.add('hidden');
       return;
     }
+    const distinctPosCount = new Set(candidates.map((c) => c.posKey).filter(Boolean)).size;
+    const showPosHints = distinctPosCount > 1;
+
     candidates.forEach((cand, idx) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'en-chip' + (idx === 0 ? ' active' : '');
+      btn.dataset.enText = cand.text;
+      btn.dataset.posKey = cand.posKey || '';
       btn.textContent = cand.text;
+      if (showPosHints && cand.posShort) {
+        const hintSpan = document.createElement('span');
+        hintSpan.className = 'chip-hint';
+        hintSpan.textContent = `(${cand.posShort})`;
+        btn.appendChild(hintSpan);
+      }
       btn.addEventListener('click', () => {
         enSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
         btn.classList.add('active');
         enInput.value = cand.text;
-        translateThaiFromEnglish(cand.text);
+        selectedFormPos = cand.posKey || '';
+        updateDuplicateNotice();
+        applyMatchedFormWiktHints(cand.text, selectedFormPos);
+        translateThaiFromEnglish(cand.text, null, selectedFormPos);
       });
       enSuggestions.appendChild(btn);
     });
@@ -3190,6 +3978,14 @@
 
   enInput.addEventListener('input', () => {
     enSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
+    selectedFormPos = '';
+    updateDuplicateNotice();
+    clearTimeout(enSyncDebounceTimer);
+    enSyncDebounceTimer = setTimeout(() => {
+      if (formWiktSenses.length > 0 && !formBackdrop.classList.contains('hidden')) {
+        applyMatchedFormWiktHints(enInput.value.trim(), '');
+      }
+    }, 220);
   });
 
   thInput.addEventListener('input', () => {
@@ -3211,34 +4007,28 @@
       translateStatus.classList.remove('hidden');
       return;
     }
-    translateThaiFromEnglish(enText);
+    translateThaiFromEnglish(enText, null, selectedFormPos);
   });
 
-  async function fetchWiktionaryFormSuggestions(svText) {
+  async function fetchWiktionaryFormSuggestions(svText, enMeaning = '', preferredPos = '') {
     const clean = stripLeadingArticle(svText).toLocaleLowerCase('sv-SE');
-    if (!clean || clean.includes(' ')) return;
+    if (!clean || clean.includes(' ')) return [];
     if (wiktFormAbortController) {
       wiktFormAbortController.abort();
     }
     const controller = new AbortController();
     wiktFormAbortController = controller;
     try {
-      const data = await fetchWithTimeout(
-        `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(clean)}`,
-        { signal: controller.signal, timeoutMs: 7000 }
-      ).then((r) => (r.ok ? r.json() : null));
-      if (!data || controller.signal.aborted || formBackdrop.classList.contains('hidden')) return;
-
-      const hints = extractWiktionaryHints(data, clean);
-      if (hints.baseForm) {
-        suggestedBaseForm = hints.baseForm;
-        useBaseFormBtn.textContent = hints.baseForm;
-        baseFormNotice.classList.remove('hidden');
+      const { senses } = await fetchWordSensesData(clean, controller.signal);
+      if (!senses.length || controller.signal.aborted || formBackdrop.classList.contains('hidden')) {
+        return [];
       }
-      if (hints.examples.length > 0 && !exampleInput.value.trim()) {
-        renderExampleSuggestions(hints.examples);
-      }
+      formWiktSenses = senses;
+      formWiktTerm = getCanonicalKey(clean);
+      applyMatchedFormWiktHints(enInput.value.trim() || enMeaning, selectedFormPos || preferredPos);
+      return senses;
     } catch (_) {
+      return [];
     } finally {
       if (wiktFormAbortController === controller) wiktFormAbortController = null;
     }
@@ -3308,9 +4098,9 @@
           termInput.value = svCandidates[0].text;
           updateDuplicateNotice();
           renderSwedishChips(svCandidates);
-          fetchWiktionaryFormSuggestions(svCandidates[0].text);
+          fetchWiktionaryFormSuggestions(svCandidates[0].text, englishSource, '');
           if (!thText && englishSource) {
-            await translateThaiFromEnglish(englishSource, req);
+            await translateThaiFromEnglish(englishSource, req, '');
           } else {
             translateStatus.textContent = 'Swedish options found – review and tap Save.';
           }
@@ -3321,13 +4111,35 @@
         return;
       }
 
-      // Forward Suggest: Swedish -> English -> Thai (+ Wiktionary base form & examples)
+      // Forward Suggest: Swedish -> English + Wiktionary Senses in parallel -> Sense-synced Thai & Examples
       translateStatus.textContent = 'Finding English options...';
-      fetchWiktionaryFormSuggestions(svText);
+      const wiktPromise = fetchWiktionaryFormSuggestions(svText, enText, '');
 
-      const enResult = await translateWithDict(svText, 'sv', 'en', req.signal);
+      let enResult = null;
+      try {
+        enResult = await translateWithDict(svText, 'sv', 'en', req.signal);
+      } catch (err) {
+        if (req.reqId !== translateReqId || req.signal.aborted) return;
+        // Rescue with Wiktionary translations if both Google & MyMemory rate-limited/failed
+        const rescueSenses = await wiktPromise;
+        if (req.reqId !== translateReqId || req.signal.aborted) return;
+        const firstWiktEn = rescueSenses.flatMap((s) => s.enTerms || [])[0] || '';
+        if (firstWiktEn) {
+          enResult = { primary: firstWiktEn, dictEntries: [], provider: 'wiktionary' };
+        } else {
+          throw err;
+        }
+      }
       if (req.reqId !== translateReqId || req.signal.aborted) return;
-      const candidates = buildCandidateList(enResult, svText, 5);
+
+      // Wait briefly (up to 450ms) for Wiktionary senses if fast, otherwise re-refine when ready
+      const fastSenses = await Promise.race([
+        wiktPromise,
+        new Promise((resolve) => setTimeout(() => resolve([]), 450))
+      ]);
+      if (req.reqId !== translateReqId || req.signal.aborted) return;
+
+      const candidates = buildEnglishCandidates(enResult, svText, fastSenses, 6);
       suggestBtn.disabled = false;
       suggestBtn.textContent = 'Suggest';
       telemetry?.trackSuggestResult({
@@ -3340,7 +4152,30 @@
       if (candidates.length > 0) {
         renderEnglishChips(candidates);
         enInput.value = candidates[0].text;
-        await translateThaiFromEnglish(candidates[0].text, req);
+        selectedFormPos = candidates[0].posKey || '';
+        updateDuplicateNotice();
+        applyMatchedFormWiktHints(candidates[0].text, selectedFormPos);
+
+        // If Wiktionary finished slightly later, refine POS chips & matched examples/baseForm seamlessly
+        if (fastSenses.length === 0) {
+          wiktPromise.then((lateSenses) => {
+            if (!lateSenses.length || req.reqId !== translateReqId || formBackdrop.classList.contains('hidden')) return;
+            const refined = buildEnglishCandidates(enResult, svText, lateSenses, 6);
+            const activeEn = enInput.value.trim();
+            renderEnglishChips(refined);
+            const matchBtn = Array.from(enSuggestions.querySelectorAll('.en-chip')).find(
+              (b) => b.dataset.enText?.toLowerCase() === activeEn.toLowerCase()
+            );
+            if (matchBtn) {
+              enSuggestions.querySelectorAll('.en-chip').forEach((c) => c.classList.remove('active'));
+              matchBtn.classList.add('active');
+              selectedFormPos = matchBtn.dataset.posKey || selectedFormPos;
+            }
+            applyMatchedFormWiktHints(activeEn, selectedFormPos);
+          });
+        }
+
+        await translateThaiFromEnglish(candidates[0].text, req, selectedFormPos);
       } else {
         translateStatus.textContent = 'Could not fetch suggestions right now.';
         translateStatus.classList.add('error');
