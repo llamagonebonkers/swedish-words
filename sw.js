@@ -1,10 +1,10 @@
-const CACHE_NAME = 'svenska-ord-v25';
+const CACHE_NAME = 'svenska-ord-v26';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=25',
-  './telemetry.js?v=25',
-  './app.js?v=25',
+  './styles.css?v=26',
+  './telemetry.js?v=26',
+  './app.js?v=26',
   './manifest.webmanifest',
   './icon.svg',
   './icon-192.png',
@@ -76,7 +76,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Versioned static assets (?v=25, icons, manifest): Cache-first for 0ms startup
+  // Versioned static assets (?v=26, icons, manifest): Cache-first for 0ms startup
   event.respondWith(
     caches.open(CACHE_NAME).then((cache) =>
       cache.match(request).then((cached) => {

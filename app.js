@@ -97,8 +97,11 @@
   let formWiktSenses = [];
   let formWiktTerm = '';
   let selectedFormPos = '';
+  let currentThaiPosGroups = [];
+  let activeThaiPos = '';
   let enSyncDebounceTimer = null;
   let exampleChipTranslateController = null;
+  let detailThaiAbortController = null;
 
   // In-memory search & sort index (never persisted to localStorage)
   const entryIndexCache = new WeakMap();
@@ -178,6 +181,10 @@
   const detailEn = document.getElementById('detailEn');
   const detailThWrap = document.getElementById('detailThWrap');
   const detailTh = document.getElementById('detailTh');
+  const detailThSuggest = document.getElementById('detailThSuggest');
+  const detailThSuggestLabel = document.getElementById('detailThSuggestLabel');
+  const detailThDismissBtn = document.getElementById('detailThDismissBtn');
+  const detailThSuggestChips = document.getElementById('detailThSuggestChips');
   const detailExampleWrap = document.getElementById('detailExampleWrap');
   const detailExample = document.getElementById('detailExample');
   const detailExampleEn = document.getElementById('detailExampleEn');
@@ -212,6 +219,7 @@
   const translateStatus = document.getElementById('translateStatus');
   const svSuggestions = document.getElementById('svSuggestions');
   const enSuggestions = document.getElementById('enSuggestions');
+  const thPosFilter = document.getElementById('thPosFilter');
   const thSuggestions = document.getElementById('thSuggestions');
   const exampleSuggestions = document.getElementById('exampleSuggestions');
   const retranslateThBtn = document.getElementById('retranslateThBtn');
@@ -1588,6 +1596,7 @@
     detailBadge.textContent = item.type === 'phrase' ? 'Phrase' : 'Word';
     renderTermWithArticle(detailTerm, item);
     detailVoiceTip.classList.add('hidden');
+    hideDetailThaiSuggest();
 
     if (item.en && item.en.trim()) {
       detailEn.textContent = item.en;
@@ -1779,6 +1788,105 @@
       .filter((w) => w.length >= 2 && !EN_STOPWORDS.has(w));
   }
 
+  function hideDetailThaiSuggest() {
+    if (detailThaiAbortController) {
+      detailThaiAbortController.abort();
+      detailThaiAbortController = null;
+    }
+    if (detailThSuggest) detailThSuggest.classList.add('hidden');
+    if (detailThSuggestChips) detailThSuggestChips.textContent = '';
+  }
+
+  detailThDismissBtn?.addEventListener('click', hideDetailThaiSuggest);
+
+  async function loadDetailThaiForPos(item, targetSense) {
+    hideDetailThaiSuggest();
+    if (!item || !targetSense || !navigator.onLine || !detailThSuggest) return;
+
+    const entryId = item.id;
+    const targetPosKey = normalizePosCategory(targetSense.pos);
+    const controller = new AbortController();
+    detailThaiAbortController = controller;
+
+    try {
+      let candidates = [];
+      let sourceLabel = '';
+
+      // 1. First check if the entry's current English word has Thai translations specifically for targetPosKey
+      const currentEn = (item.en || '').trim();
+      if (currentEn) {
+        const res = await translateWithDict(currentEn, 'en', 'th', controller.signal);
+        if (controller.signal.aborted || selectedEntryId !== entryId) return;
+        const grouped = buildThaiPosGroups(res, currentEn, { preferredPos: targetPosKey });
+        const exactGroup = grouped.groups.find((g) => g.posKey === targetPosKey);
+        if (exactGroup && exactGroup.candidates.length > 0) {
+          candidates = exactGroup.candidates;
+        }
+      }
+
+      // 2. If current English belongs to a different sense (e.g. kort: "short" -> switched to Noun "card"),
+      //    translate the new sense's primary English hint term!
+      if (candidates.length === 0 && targetSense.hint) {
+        const primaryHintEn = targetSense.hint
+          .split(/[,;/]+/)[0]
+          .replace(/\([^)]*\)/g, '')
+          .trim();
+        if (primaryHintEn && primaryHintEn.length <= 40) {
+          const res = await translateWithDict(primaryHintEn, 'en', 'th', controller.signal);
+          if (controller.signal.aborted || selectedEntryId !== entryId) return;
+          const grouped = buildThaiPosGroups(res, primaryHintEn, { preferredPos: targetPosKey });
+          const active = grouped.groups.find((g) => g.posKey === grouped.activePos) || grouped.groups[0];
+          if (active && active.candidates.length > 0) {
+            candidates = active.candidates;
+            sourceLabel = primaryHintEn;
+          }
+        }
+      }
+
+      if (controller.signal.aborted || selectedEntryId !== entryId || candidates.length === 0) return;
+
+      const currentTh = (item.th || '').trim();
+      const topCands = candidates.slice(0, 4);
+      // Skip showing bar if the single suggestion is already identical to current Thai
+      if (topCands.length === 1 && topCands[0].text === currentTh) return;
+
+      detailThSuggestLabel.textContent = sourceLabel
+        ? `Thai for ${targetSense.pos} (${sourceLabel})`
+        : `Thai for ${targetSense.pos}`;
+      detailThSuggestChips.textContent = '';
+
+      for (const cand of topCands) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'en-chip' + (cand.text === currentTh ? ' active' : '');
+        btn.textContent = cand.text;
+        if (cand.hint) {
+          const hintSpan = document.createElement('span');
+          hintSpan.className = 'chip-hint';
+          hintSpan.textContent = `(${cand.hint})`;
+          btn.appendChild(hintSpan);
+        }
+        btn.addEventListener('click', () => {
+          const live = entries.find((e) => e.id === entryId);
+          if (!live) return;
+          live.th = cand.text;
+          invalidateEntryIndex(live);
+          scheduleSave(200);
+          detailTh.textContent = cand.text;
+          detailThWrap.classList.remove('hidden');
+          hideDetailThaiSuggest();
+          showToast(`Updated Thai to "${cand.text}"`);
+        });
+        detailThSuggestChips.appendChild(btn);
+      }
+
+      detailThSuggest.classList.remove('hidden');
+    } catch (_) {
+    } finally {
+      if (detailThaiAbortController === controller) detailThaiAbortController = null;
+    }
+  }
+
   function switchSelectedEntrySense(targetPos) {
     const liveItem = entries.find((e) => e.id === selectedEntryId);
     if (!liveItem || !liveItem.grammar || !Array.isArray(liveItem.grammar.altSenses)) return;
@@ -1797,6 +1905,7 @@
     renderTermWithArticle(detailTerm, liveItem);
     renderGrammarData(liveItem.grammar);
     render();
+    loadDetailThaiForPos(liveItem, target);
   }
 
   function renderGrammarData(grammar) {
@@ -2641,6 +2750,7 @@
       exampleAbortController.abort();
       exampleAbortController = null;
     }
+    hideDetailThaiSuggest();
     detailBackdrop.classList.add('hidden');
     detailSheet.style.transform = '';
     detailSheet.style.transition = '';
@@ -2760,6 +2870,10 @@
     svSuggestions.classList.add('hidden');
     enSuggestions.textContent = '';
     enSuggestions.classList.add('hidden');
+    if (thPosFilter) {
+      thPosFilter.textContent = '';
+      thPosFilter.classList.add('hidden');
+    }
     thSuggestions.textContent = '';
     thSuggestions.classList.add('hidden');
     exampleSuggestions.textContent = '';
@@ -2770,6 +2884,8 @@
     formWiktSenses = [];
     formWiktTerm = '';
     selectedFormPos = '';
+    currentThaiPosGroups = [];
+    activeThaiPos = '';
   }
 
   function openForm(
@@ -3543,12 +3659,15 @@
         if (Array.isArray(detailed)) {
           for (const entry of detailed) {
             const word = (entry?.[0] || '').trim();
-            const back = Array.isArray(entry?.[1]) ? entry[1].slice(0, 2).join(', ') : '';
-            if (word) dictEntries.push({ text: word, pos, back });
+            const backList = Array.isArray(entry?.[1])
+              ? entry[1].map((b) => String(b || '').trim()).filter(Boolean)
+              : [];
+            const back = backList.slice(0, 2).join(', ');
+            if (word) dictEntries.push({ text: word, pos, back, backList });
           }
         } else if (Array.isArray(posBlock?.[1])) {
           for (const word of posBlock[1]) {
-            if (word) dictEntries.push({ text: String(word).trim(), pos, back: '' });
+            if (word) dictEntries.push({ text: String(word).trim(), pos, back: '', backList: [] });
           }
         }
       }
@@ -3784,6 +3903,141 @@
     svSuggestions.classList.remove('hidden');
   }
 
+  function displayPosPillLabel(posKey) {
+    const map = {
+      Noun: 'Noun',
+      Verb: 'Verb',
+      Adjective: 'Adj',
+      Adverb: 'Adv',
+      Pronoun: 'Pron',
+      Preposition: 'Prep',
+      Conjunction: 'Conj',
+      Interjection: 'Interj',
+      Numeral: 'Num'
+    };
+    return map[posKey] || posKey;
+  }
+
+  // Group Thai dictionary entries by POS and rank exact back-translation matches first
+  function buildThaiPosGroups(result, enText, { preferredPos = '', wiktThTerms = [] } = {}) {
+    const srcLower = (enText || '').trim().toLowerCase().replace(/^to\s+/i, '');
+    const primaryText = (result?.primary || '').trim();
+    const normPref = normalizePosCategory(preferredPos);
+    const dictEntries = Array.isArray(result?.dictEntries) ? result.dictEntries : [];
+
+    const byPos = new Map();
+    dictEntries.forEach((item, idx) => {
+      const pk = normalizePosCategory(item.pos) || 'Other';
+      if (!byPos.has(pk)) byPos.set(pk, []);
+      const backList = Array.isArray(item.backList) ? item.backList : [];
+      const firstBack = (backList[0] || '').toLowerCase();
+      let score = 0;
+      if (srcLower && firstBack === srcLower) score += 100;
+      else if (srcLower && backList.some((b) => b.toLowerCase() === srcLower)) score += 50;
+      if (primaryText && item.text.toLowerCase() === primaryText.toLowerCase()) score += 25;
+      score -= idx * 0.01;
+      byPos.get(pk).push({
+        text: item.text,
+        hint: item.back || '',
+        posKey: pk,
+        score
+      });
+    });
+
+    const groups = [];
+    for (const [posKey, items] of byPos.entries()) {
+      items.sort((a, b) => b.score - a.score);
+      const seen = new Set();
+      const candidates = [];
+
+      if (posKey === normPref && Array.isArray(wiktThTerms)) {
+        for (const t of wiktThTerms) {
+          const clean = (t || '').trim();
+          if (clean && !seen.has(clean.toLowerCase())) {
+            seen.add(clean.toLowerCase());
+            candidates.push({ text: clean, hint: 'Wiktionary', posKey });
+          }
+        }
+      }
+
+      for (const it of items) {
+        const key = it.text.toLowerCase();
+        if (key === srcLower || seen.has(key)) continue;
+        seen.add(key);
+        candidates.push({ text: it.text, hint: it.hint, posKey });
+        if (candidates.length >= 5) break;
+      }
+
+      if (candidates.length > 0) {
+        groups.push({ posKey, label: displayPosPillLabel(posKey), candidates });
+      }
+    }
+
+    // Fallback for phrases / MyMemory / single-primary responses with no POS dict blocks
+    if (groups.length === 0) {
+      const flat = buildCandidateList(result, enText, 5, {
+        preferredPos: normPref,
+        priorityTerms: wiktThTerms
+      });
+      if (flat.length > 0) {
+        groups.push({ posKey: normPref || 'All', label: displayPosPillLabel(normPref || 'All'), candidates: flat });
+      }
+    }
+
+    // Pick initial active POS: explicit preferredPos -> POS containing primary -> first group
+    let activePos = '';
+    if (normPref && groups.some((g) => g.posKey === normPref)) {
+      activePos = normPref;
+    } else if (primaryText) {
+      const primaryGroup = groups.find((g) =>
+        g.candidates.some((c) => c.text.toLowerCase() === primaryText.toLowerCase())
+      );
+      activePos = primaryGroup ? primaryGroup.posKey : groups[0]?.posKey || '';
+    } else {
+      activePos = groups[0]?.posKey || '';
+    }
+
+    // Ensure preferred/active group appears first if user has a clear POS context
+    if (activePos && groups.length > 1) {
+      groups.sort((a, b) => (a.posKey === activePos ? -1 : b.posKey === activePos ? 1 : 0));
+    }
+
+    return { groups, activePos };
+  }
+
+  function renderThaiPosFilter(groups, activePos) {
+    if (!thPosFilter) return;
+    thPosFilter.textContent = '';
+    if (!Array.isArray(groups) || groups.length <= 1) {
+      thPosFilter.classList.add('hidden');
+      return;
+    }
+
+    for (const group of groups) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const isActive = group.posKey === activePos;
+      btn.className = 'th-pos-pill' + (isActive ? ' active' : '');
+      btn.textContent = group.label;
+      btn.setAttribute('aria-pressed', String(isActive));
+      btn.addEventListener('click', () => {
+        if (activeThaiPos === group.posKey) return;
+        activeThaiPos = group.posKey;
+        if (group.posKey && group.posKey !== 'Other' && group.posKey !== 'All') {
+          selectedFormPos = group.posKey;
+          applyMatchedFormWiktHints(enInput.value.trim(), selectedFormPos);
+        }
+        renderThaiPosFilter(currentThaiPosGroups, activeThaiPos);
+        if (group.candidates.length > 0) {
+          thInput.value = group.candidates[0].text;
+          renderThaiChips(group.candidates);
+        }
+      });
+      thPosFilter.appendChild(btn);
+    }
+    thPosFilter.classList.remove('hidden');
+  }
+
   function renderThaiChips(candidates) {
     thSuggestions.textContent = '';
     if (candidates.length <= 1) {
@@ -3875,6 +4129,12 @@
     const { reqId, signal } = existingReq || startTranslateRequest();
 
     retranslateThBtn.disabled = true;
+    currentThaiPosGroups = [];
+    activeThaiPos = '';
+    if (thPosFilter) {
+      thPosFilter.textContent = '';
+      thPosFilter.classList.add('hidden');
+    }
     thSuggestions.textContent = '';
     thSuggestions.classList.add('hidden');
     translateStatus.textContent = `Translating "${enText}" to Thai...`;
@@ -3896,12 +4156,19 @@
         }
       }
 
-      const candidates = buildCandidateList(result, enText, 5, {
+      const { groups, activePos } = buildThaiPosGroups(result, enText, {
         preferredPos: effectivePos,
-        priorityTerms: wiktThTerms
+        wiktThTerms
       });
+      currentThaiPosGroups = groups;
+      activeThaiPos = activePos;
+
+      const activeGroup = groups.find((g) => g.posKey === activePos) || groups[0];
+      const candidates = activeGroup ? activeGroup.candidates : [];
+
       if (candidates.length > 0) {
         thInput.value = candidates[0].text;
+        renderThaiPosFilter(groups, activePos);
         renderThaiChips(candidates);
         translateStatus.textContent = 'Pick the best match above or tap Save.';
         translateStatus.classList.remove('error');

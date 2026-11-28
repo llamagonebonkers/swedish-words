@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <link rel="stylesheet" href="styles.css?v=25" />
+  <link rel="stylesheet" href="styles.css?v=26" />
 </head>
 <body>
   <div class="app">
@@ -208,6 +208,13 @@
             <span class="translation-lang">Thai · ภาษาไทย</span>
             <p class="translation-text thai" id="detailTh" lang="th"></p>
           </div>
+          <div class="detail-th-suggest hidden" id="detailThSuggest" role="status" aria-live="polite">
+            <div class="detail-th-suggest-head">
+              <span class="detail-th-suggest-label" id="detailThSuggestLabel">Thai options</span>
+              <button type="button" class="detail-th-dismiss" id="detailThDismissBtn" aria-label="Dismiss Thai suggestions">×</button>
+            </div>
+            <div class="en-suggestions" id="detailThSuggestChips"></div>
+          </div>
         </div>
         <div class="detail-example hidden" id="detailExampleWrap">
           <div class="example-header">
@@ -291,6 +298,7 @@
                 From EN
               </button>
             </div>
+            <div class="th-pos-filter hidden" id="thPosFilter" role="group" aria-label="Thai word class"></div>
             <div class="en-suggestions hidden" id="thSuggestions" role="group" aria-label="Thai suggestions"></div>
           </div>
 
@@ -368,7 +376,7 @@
     </div>
   </div>
 
-  <script src="telemetry.js?v=25"></script>
-  <script src="app.js?v=25"></script>
+  <script src="telemetry.js?v=26"></script>
+  <script src="app.js?v=26"></script>
 </body>
 </html>
